@@ -144,6 +144,25 @@ def test_no_observation_clamping():
     assert saw_above
 
 
+def test_zero_uncertainty_observations_are_exact():
+    env = make_env(
+        num_game_iterations=3,
+        uncertainties=[0.0, 0.0, 0.0, 0.0],
+        F=[2.5],
+        mult_fact=[2.5],
+    )
+    obs = env.reset(mult_in=2.5)
+    for agent in env.possible_agents:
+        assert abs(_f_hat(obs[agent]) - 2.5) < 1e-9
+
+    for _ in range(2):
+        obs, _, done, _ = env.step({agent: 0 for agent in env.possible_agents})
+        for agent in env.possible_agents:
+            assert abs(_f_hat(obs[agent]) - 2.5) < 1e-9
+        if done:
+            break
+
+
 def test_observation_space_is_box():
     env = make_env()
     for agent in env.possible_agents:

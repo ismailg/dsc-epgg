@@ -302,7 +302,7 @@ def _single_run(cfg: TrainConfig):
                     message_log_probs[sender_id] = msg_lp
 
                 dropped = wrapper.apply_msg_dropout(proposed)
-                for sender_id, msg in dropped.items():
+                for sender_id, msg in proposed.items():
                     wrapper.update_msg_marginals(sender_id, msg)
                 current_messages = dropped
                 aug_obs = {

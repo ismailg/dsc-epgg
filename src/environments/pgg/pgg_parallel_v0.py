@@ -94,7 +94,6 @@ class parallel_env(ParallelEnv):
                 self.uncertainties_dict[agent] = float(self.uncertainties[idx])
         else: 
             self.uncertainties_dict = {agent: 0.0 for agent in self.agents}
-        self.uncertainty_eps = 1e-6
         self.n_actions = 2 # give money (1), keep money (0)
         self.obs_space_size = 2 # [f_hat, endowment]
         self.obs_dim = 2
@@ -140,7 +139,7 @@ class parallel_env(ParallelEnv):
         self.observations = {}
         current_f = float(self.current_multiplier.item())
         for agent in self.agents:
-            sigma = float(self.uncertainties_dict[agent]) + self.uncertainty_eps
+            sigma = float(self.uncertainties_dict[agent])
             # No clipping/clamping: keep raw Gaussian observation for exact likelihood modeling.
             obs_multiplier = np.random.normal(current_f, sigma)
             self.observations[agent] = torch.tensor(
