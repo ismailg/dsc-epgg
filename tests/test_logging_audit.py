@@ -45,6 +45,9 @@ def test_session_logger_and_consolidate(tmp_path):
     consolidated = logger.consolidate(delete_parts=False)
     with np.load(consolidated, allow_pickle=False) as data:
         assert data["true_f"].shape == (2, 3)
+        assert data["f_t"].shape == (2, 3)
+        assert data["regime_t"].shape == (2, 3)
+        assert np.isin(data["regime_t"], [0, 1, 2]).all()
         assert data["executed_actions"].shape == (2, 3, 2)
         assert data["welfare"].shape == (2, 3)
 

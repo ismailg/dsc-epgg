@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import math
 import os
 import random
+import subprocess
 import sys
 from dataclasses import dataclass
 from typing import Dict, List
@@ -63,8 +65,8 @@ class TrainConfig:
     max_grad_norm: float = 0.5
     ppo_epochs: int = 4
     mini_batch_size: int = 32
-    sign_lambda: float = 0.0
-    list_lambda: float = 0.0
+    sign_lambda: float = 0.1
+    list_lambda: float = 0.1
 
     seed: int = 42
     log_interval: int = 10
@@ -162,7 +164,9 @@ def _build_agents(cfg: TrainConfig, obs_dim: int, sender_ids: List[str]):
 
 
 def _save_agents(path: str, agents: Dict[str, PPOAgentV2], cfg: TrainConfig):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    save_dir = os.path.dirname(path)
+    if save_dir:
+        os.makedirs(save_dir, exist_ok=True)
     payload = {
         "config": cfg.__dict__,
         "agents": {},
@@ -176,6 +180,30 @@ def _save_agents(path: str, agents: Dict[str, PPOAgentV2], cfg: TrainConfig):
             ),
         }
     torch.save(payload, path)
+    _write_run_manifest(path=path, cfg=cfg)
+
+
+def _git_commit_hash() -> str:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    try:
+        return (
+            subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo_root)
+            .decode("utf-8")
+            .strip()
+        )
+    except Exception:
+        return "unknown"
+
+
+def _write_run_manifest(path: str, cfg: TrainConfig):
+    manifest_path = os.path.splitext(path)[0] + ".run.json"
+    payload = {
+        "timestamp_utc": datetime.datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+        "git_commit": _git_commit_hash(),
+        "config": cfg.__dict__,
+    }
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
 
 
 def _single_run(cfg: TrainConfig):
@@ -480,8 +508,8 @@ def parse_args():
     parser.add_argument("--max_grad_norm", type=float, default=0.5)
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--mini_batch_size", type=int, default=32)
-    parser.add_argument("--sign_lambda", type=float, default=0.0)
-    parser.add_argument("--list_lambda", type=float, default=0.0)
+    parser.add_argument("--sign_lambda", type=float, default=0.1)
+    parser.add_argument("--list_lambda", type=float, default=0.1)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--save_path", type=str, default="outputs/ppo_agents.pt")
@@ -504,6 +532,11 @@ def parse_args():
 
 
 def args_to_config(args) -> TrainConfig:
+    resolved_n_senders = int(args.n_senders)
+    if bool(args.comm_enabled) and resolved_n_senders == 0:
+        # v3.2 default: in comm-on conditions, all agents can send.
+        resolved_n_senders = int(args.n_agents)
+
     cfg = TrainConfig(
         n_agents=args.n_agents,
         T=args.T,
@@ -514,7 +547,7 @@ def args_to_config(args) -> TrainConfig:
         rho=args.rho,
         epsilon_tremble=args.epsilon_tremble,
         comm_enabled=bool(args.comm_enabled),
-        n_senders=args.n_senders,
+        n_senders=resolved_n_senders,
         vocab_size=args.vocab_size,
         msg_dropout=args.msg_dropout,
         hidden_size=args.hidden_size,
@@ -550,6 +583,8 @@ def args_to_config(args) -> TrainConfig:
     )
     if len(cfg.sigmas) != cfg.n_agents:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
+    if cfg.n_senders < 0 or cfg.n_senders > cfg.n_agents:
+        raise ValueError("n_senders must be in [0, n_agents]")
     if cfg.comm_enabled and cfg.n_senders <= 0:
         raise ValueError("comm_enabled requires n_senders > 0")
     return cfg

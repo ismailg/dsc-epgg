@@ -21,12 +21,29 @@ class SessionLogger:
             f"data_{self.condition_name}_{self.seed}_{session_id}.npz",
         )
 
+    @staticmethod
+    def _regime_codes(true_f: np.ndarray, n_agents: int) -> np.ndarray:
+        """
+        Encode game regime per round:
+        0 -> competitive (f <= 1)
+        1 -> mixed-motive (1 < f <= N)
+        2 -> cooperative (f > N)
+        """
+        arr = np.asarray(true_f, dtype=np.float32)
+        out = np.zeros(arr.shape, dtype=np.int8)
+        out[arr > 1.0] = 1
+        out[arr > float(n_agents)] = 2
+        return out
+
     def log_session(self, buffer) -> str:
         t = buffer.t
         out_path = self._path(self.session_count)
+        regime_t = self._regime_codes(buffer.true_f[:t], n_agents=buffer.n_agents)
 
         payload = dict(
             true_f=buffer.true_f[:t],
+            f_t=buffer.true_f[:t],
+            regime_t=regime_t,
             f_hats=buffer.f_hats[:t],
             intended_actions=buffer.actions[:t],
             executed_actions=buffer.executed_actions[:t],
@@ -73,4 +90,3 @@ class SessionLogger:
                 os.remove(path)
 
         return consolidated_path
-

@@ -1,5 +1,8 @@
 import numpy as np
-from gym.spaces import Box
+try:
+    from gym.spaces import Box
+except ImportError:  # pragma: no cover - compatibility path
+    from gymnasium.spaces import Box
 
 from src.environments import pgg_parallel_v0
 

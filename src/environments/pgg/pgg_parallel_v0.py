@@ -1,5 +1,8 @@
 import functools
-from gym.spaces import Discrete, Box
+try:
+    from gym.spaces import Discrete, Box
+except ImportError:  # pragma: no cover - compatibility path
+    from gymnasium.spaces import Discrete, Box
 from pettingzoo import ParallelEnv
 from pettingzoo.utils import wrappers
 from pettingzoo.utils import parallel_to_aec
