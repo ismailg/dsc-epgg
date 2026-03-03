@@ -26,3 +26,21 @@ def test_cooperation_changes(tmp_path):
     coop_rates = np.array([m["coop_rate"] for m in metrics], dtype=np.float32)
     assert np.std(coop_rates) > 1e-3
 
+
+def test_train_with_session_logging(tmp_path):
+    session_dir = tmp_path / "sessions"
+    cfg = minimal_test_config(
+        n_episodes=3,
+        T=6,
+        save_path=str(tmp_path / "agents3.pt"),
+        seed=123,
+        log_sessions=True,
+        session_log_dir=str(session_dir),
+        condition_name="ci",
+        consolidate_sessions=True,
+    )
+    _ = train(cfg)
+    parts = list(session_dir.glob("data_ci_123_*.npz"))
+    assert len(parts) >= 3
+    consolidated = session_dir / "data_ci_123_consolidated.npz"
+    assert consolidated.exists()

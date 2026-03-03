@@ -12,6 +12,14 @@ Implemented:
   - Stacks per-session files into one consolidated file per `(condition, seed)`.
   - Optional deletion of shard files after consolidation.
 
+Hooked into trainer:
+- `src/experiments_pgg_v0/train_ppo.py` now supports:
+  - `--log_sessions`
+  - `--session_log_dir`
+  - `--condition_name`
+  - `--consolidate_sessions`
+- When enabled, each training episode logs one session file and optionally consolidates.
+
 ## Regime identifiability audit
 
 File: `src/analysis/regime_audit.py`
@@ -26,9 +34,14 @@ Implemented:
 - Recommendation rule:
   - If `median <= 2`: `increase_sigma_or_reduce_F`, else `ok`.
 
+Hooked into trainer:
+- `train_ppo.py` supports:
+  - `--run_regime_audit`
+  - `--audit_sessions`
+- Audit executes after training and prints JSON summary.
+
 ## Validation
 
 Added tests in `tests/test_logging_audit.py`:
 - Session logger + consolidation shape checks.
 - Regime audit execution and output-schema checks.
-

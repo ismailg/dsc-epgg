@@ -20,7 +20,9 @@ if __package__ is None or __package__ == "":
 
 from src.algos.PPO import PPOAgentV2, PPOTrainer
 from src.algos.trajectory_buffer import TrajectoryBuffer
+from src.analysis.regime_audit import regime_audit
 from src.environments import pgg_parallel_v0
+from src.logging import SessionLogger
 from src.wrappers import ObservationWrapper
 
 
@@ -69,6 +71,12 @@ class TrainConfig:
     save_path: str = "outputs/ppo_agents.pt"
     enable_comm_fallback: bool = True
     max_comm_debug_cycles: int = 2
+    log_sessions: bool = False
+    session_log_dir: str = "outputs/sessions"
+    condition_name: str = "default"
+    consolidate_sessions: bool = False
+    run_regime_audit: bool = False
+    audit_sessions: int = 100
 
 
 def minimal_test_config(**overrides):
@@ -183,6 +191,15 @@ def _single_run(cfg: TrainConfig):
         mini_batch_size=cfg.mini_batch_size,
         sign_lambda=cfg.sign_lambda,
         list_lambda=cfg.list_lambda,
+    )
+    session_logger = (
+        SessionLogger(
+            save_dir=cfg.session_log_dir,
+            condition_name=cfg.condition_name,
+            seed=cfg.seed,
+        )
+        if cfg.log_sessions
+        else None
     )
 
     metrics_over_time = []
@@ -310,6 +327,9 @@ def _single_run(cfg: TrainConfig):
         if not _safe_is_finite(train_metrics):
             raise FloatingPointError(f"non-finite PPO metrics at episode {episode}: {train_metrics}")
 
+        if session_logger is not None:
+            session_logger.log_session(buffer)
+
         coop_rate = float(np.mean(buffer.executed_actions[: buffer.t])) if buffer.t > 0 else 0.0
         avg_reward = float(np.mean(buffer.agent_rewards[: buffer.t])) if buffer.t > 0 else 0.0
         episode_metrics = {
@@ -329,6 +349,26 @@ def _single_run(cfg: TrainConfig):
             )
 
     _save_agents(cfg.save_path, agents, cfg)
+
+    if session_logger is not None and cfg.consolidate_sessions:
+        consolidated = session_logger.consolidate(delete_parts=False)
+        print(f"[session-logger] consolidated sessions -> {consolidated}")
+
+    if cfg.run_regime_audit:
+        env_cfg = dict(
+            n_agents=cfg.n_agents,
+            num_game_iterations=cfg.T,
+            mult_fact=list(cfg.F),
+            F=list(cfg.F),
+            uncertainties=list(cfg.sigmas),
+            fraction=False,
+            rho=cfg.rho,
+            epsilon_tremble=cfg.epsilon_tremble,
+            endowment=cfg.endowment,
+        )
+        audit = regime_audit(env_cfg, n_sessions=cfg.audit_sessions)
+        print("[regime-audit]", json.dumps(audit))
+
     return metrics_over_time
 
 
@@ -385,6 +425,12 @@ def parse_args():
     parser.add_argument("--save_path", type=str, default="outputs/ppo_agents.pt")
     parser.add_argument("--disable_comm_fallback", action="store_true")
     parser.add_argument("--max_comm_debug_cycles", type=int, default=2)
+    parser.add_argument("--log_sessions", action="store_true")
+    parser.add_argument("--session_log_dir", type=str, default="outputs/sessions")
+    parser.add_argument("--condition_name", type=str, default="default")
+    parser.add_argument("--consolidate_sessions", action="store_true")
+    parser.add_argument("--run_regime_audit", action="store_true")
+    parser.add_argument("--audit_sessions", type=int, default=100)
     return parser.parse_args()
 
 
@@ -419,6 +465,12 @@ def args_to_config(args) -> TrainConfig:
         save_path=args.save_path,
         enable_comm_fallback=not bool(args.disable_comm_fallback),
         max_comm_debug_cycles=args.max_comm_debug_cycles,
+        log_sessions=bool(args.log_sessions),
+        session_log_dir=args.session_log_dir,
+        condition_name=args.condition_name,
+        consolidate_sessions=bool(args.consolidate_sessions),
+        run_regime_audit=bool(args.run_regime_audit),
+        audit_sessions=args.audit_sessions,
     )
     if len(cfg.sigmas) != cfg.n_agents:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
