@@ -267,8 +267,25 @@ def _stage2_is_running() -> bool:
     return len(pids) > 0
 
 
-def _run_fixedf_sweep_batch(seeds: List[int], failures: List[str]):
-    max_workers = 1 if _stage2_is_running() else 2
+def _run_fixedf_sweep_batch(
+    seeds: List[int],
+    failures: List[str],
+    fixedf_workers_with_stage2: int,
+    fixedf_workers_without_stage2: int,
+    max_total_trainers: int,
+    early_stop_patience: int,
+    early_stop_min_delta: float,
+):
+    base_workers = (
+        int(fixedf_workers_with_stage2) if _stage2_is_running() else int(fixedf_workers_without_stage2)
+    )
+    active_now = _count_active_trainers()
+    available = max(1, int(max_total_trainers) - int(active_now))
+    max_workers = max(1, min(int(base_workers), int(available)))
+    _log(
+        f"fixed-f batch seeds={seeds} active_trainers={active_now} "
+        f"base_workers={base_workers} available={available} using_workers={max_workers}"
+    )
     cmd = [
         "python3",
         "src/experiments_pgg_v0/run_fixed_f_sweep.py",
@@ -290,6 +307,10 @@ def _run_fixedf_sweep_batch(seeds: List[int], failures: List[str]):
         "500",
         "--reward_scale",
         "20.0",
+        "--early_stop_patience",
+        str(early_stop_patience),
+        "--early_stop_min_delta",
+        str(early_stop_min_delta),
         "--skip_existing",
     ]
     rc = _spawn_and_wait(
@@ -471,6 +492,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--poll_sec", type=int, default=30)
     parser.add_argument("--skip_grid", action="store_true")
+    parser.add_argument("--max_total_trainers", type=int, default=9)
+    parser.add_argument("--fixedf_workers_with_stage2", type=int, default=4)
+    parser.add_argument("--fixedf_workers_without_stage2", type=int, default=6)
+    parser.add_argument("--fixedf_early_stop_patience", type=int, default=5000)
+    parser.add_argument("--fixedf_early_stop_min_delta", type=float, default=1e-3)
     args = parser.parse_args()
 
     _ensure_dirs()
@@ -487,9 +513,9 @@ def main():
     else:
         _log("no broken stage1 gamma=0.0 run found")
 
-    # Wait for current fixed-f sweep launched earlier (old defaults) to finish.
-    _wait_for_processes(r"run_fixed_f_sweep\.py --seeds 101 --n_episodes 50000")
-    _wait_for_processes(r"fixedf_0p5_seed101|fixedf_1p5_seed101|fixedf_2p5_seed101|fixedf_3p5_seed101")
+    # Wait for all currently active fixed-f sweep workers to finish before follow-up tasks.
+    _wait_for_processes(r"run_fixed_f_sweep\.py")
+    _wait_for_processes(r"train_ppo\.py.*outputs/train/fixed_f_grid/fixedf_")
 
     # Task 1 follow-up: explicit f=5.0 seed101 run.
     f5_cmd = [
@@ -534,6 +560,10 @@ def main():
         "outputs/train/fixed_f_grid/metrics/fixedf_5p0_seed101.jsonl",
         "--condition_name",
         "fixedf_5p0",
+        "--early_stop_patience",
+        str(args.fixedf_early_stop_patience),
+        "--early_stop_min_delta",
+        str(args.fixedf_early_stop_min_delta),
     ]
     _run_train_if_missing(
         save_path_rel="outputs/train/fixed_f_grid/fixedf_5p0_seed101.pt",
@@ -543,8 +573,24 @@ def main():
     )
 
     # Task 3: multi-seed fixed-f sweeps.
-    _run_fixedf_sweep_batch([202, 303], failures)
-    _run_fixedf_sweep_batch([404, 505], failures)
+    _run_fixedf_sweep_batch(
+        [202, 303],
+        failures,
+        fixedf_workers_with_stage2=args.fixedf_workers_with_stage2,
+        fixedf_workers_without_stage2=args.fixedf_workers_without_stage2,
+        max_total_trainers=args.max_total_trainers,
+        early_stop_patience=args.fixedf_early_stop_patience,
+        early_stop_min_delta=args.fixedf_early_stop_min_delta,
+    )
+    _run_fixedf_sweep_batch(
+        [404, 505],
+        failures,
+        fixedf_workers_with_stage2=args.fixedf_workers_with_stage2,
+        fixedf_workers_without_stage2=args.fixedf_workers_without_stage2,
+        max_total_trainers=args.max_total_trainers,
+        early_stop_patience=args.fixedf_early_stop_patience,
+        early_stop_min_delta=args.fixedf_early_stop_min_delta,
+    )
 
     # Task 4: update stage2 checkpoints opportunistically.
     _update_stage2_checkpoints()
@@ -561,4 +607,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

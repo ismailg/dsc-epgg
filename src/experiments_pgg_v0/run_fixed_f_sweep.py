@@ -76,6 +76,10 @@ def _build_job(args, f_value: float, seed: int) -> FixedFJob:
         str(args.min_lr),
         "--reward_scale",
         str(args.reward_scale),
+        "--early_stop_patience",
+        str(args.early_stop_patience),
+        "--early_stop_min_delta",
+        str(args.early_stop_min_delta),
     ]
     if args.comm_enabled:
         cmd.extend(["--comm_enabled", "--vocab_size", str(args.vocab_size)])
@@ -151,6 +155,8 @@ def parse_args():
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--lam", type=float, default=0.95)
     p.add_argument("--reward_scale", type=float, default=20.0)
+    p.add_argument("--early_stop_patience", type=int, default=0)
+    p.add_argument("--early_stop_min_delta", type=float, default=1e-3)
     p.add_argument("--log_interval", type=int, default=500)
     p.add_argument("--regime_log_interval", type=int, default=500)
     p.add_argument("--lr_schedule", type=str, choices=["none", "linear"], default="linear")
