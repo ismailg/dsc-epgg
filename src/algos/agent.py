@@ -27,6 +27,7 @@ class Agent():
 
         self.idx = idx
         self.gmm_ = self.gmm_[idx]
+        self.normalize_obs = bool(getattr(self, "normalize_obs", False))
         self.is_communicating = self.communicating_agents[self.idx]
         self.is_listening = self.listening_agents[self.idx]
 
@@ -35,6 +36,7 @@ class Agent():
         print("is listening?:", self.is_listening)
         print("uncertainty:", self.uncertainties[idx])
         print("gmm=", self.gmm_)
+        print("normalize_obs=", self.normalize_obs)
 
         self.n_communicating_agents = self.communicating_agents.count(1)
         opt_params = []
@@ -99,13 +101,17 @@ class Agent():
     def set_observation(self, obs, _eval=False):
 
         # set the internal state of the agent, called self.state_in
-        obs = torch.FloatTensor(obs).to(device)
+        obs = torch.as_tensor(obs, dtype=torch.float32, device=device).reshape(-1)
         if (self.gmm_):
             # If I have uncerainty and use gmm_, the obs of f will become a tensor with probabilities for every posisble m
             self.set_gmm_state(obs, _eval)
         else:
-            # otherwise I just need to normalize the observed f
-            obs = (obs - self.min_f)/(self.max_f - self.min_f)
+            if self.normalize_obs:
+                # Backward-compatible optional scalar normalization.
+                denom = (self.max_f - self.min_f)
+                if torch.allclose(denom, torch.zeros_like(denom)):
+                    denom = denom + 1e-8
+                obs = (obs - self.min_f) / denom
             self.state = obs
         #print("internal state=", self.state)
     

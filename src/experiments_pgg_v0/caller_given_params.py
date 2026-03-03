@@ -32,6 +32,7 @@ if __name__ == '__main__':
         default=[])
 
     parser.add_argument('--algorithm', type=str, choices = ["reinforce", "PPO", "dqn"], default="reinforce")
+    parser.add_argument('--normalize_obs', type=str, default="False")
     parser.add_argument('--random_baseline', type=str, default="False")
     parser.add_argument('--n_gmm_components', type=int, default=0)
     parser.add_argument('--batch_size', type=int)
@@ -61,6 +62,7 @@ if __name__ == '__main__':
 
     args = parser.parse_args()
     args.random_baseline = ast.literal_eval(args.random_baseline)
+    args.normalize_obs = ast.literal_eval(args.normalize_obs)
     n_certain_agents = args.uncertainties.count(0.)
     n_uncertain = args.n_agents - n_certain_agents
     

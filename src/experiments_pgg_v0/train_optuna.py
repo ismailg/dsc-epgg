@@ -36,6 +36,7 @@ def setup_training_hyperparams(trial, args):
         n_epochs = EPOCHS,
         obs_size = OBS_SIZE,
         action_size = ACTION_SIZE,
+        normalize_obs = False,
         n_gmm_components = trial.suggest_categorical("n_gmm_components", [3, len(args.mult_fact)]),
         decayRate = trial.suggest_categorical("decay_rate", [0.99, 0.999]),
         mult_fact = args.mult_fact,
@@ -142,7 +143,7 @@ def objective(trial, args, repo_name):
                     agent.buffer.next_states_a.append(observations[ag_idx])
                     agent.buffer.is_terminals.append(done)
                     agent.return_episode_norm += rewards_norm[ag_idx]
-                    agent.return_episode =+ rewards[ag_idx]
+                    agent.return_episode += rewards[ag_idx]
 
                 # break; if the episode is over
                 if done:

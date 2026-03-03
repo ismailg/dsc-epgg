@@ -3,6 +3,10 @@ from src.algos.agent import Agent
 from src.nets.ActorCritic import ActorCritic
 import torch
 import copy
+import numpy as np
+import torch.nn as nn
+import torch.nn.functional as F
+from torch.distributions import Categorical
 
 #https://github.com/nikhilbarhate99/PPO-PyTorch/blob/master/PPO.py
 
@@ -145,3 +149,285 @@ class PPO(Agent):
         # clear buffer
         self.buffer.clear()
         self.reset()
+
+
+class _MLP(nn.Module):
+    def __init__(self, input_dim: int, output_dim: int, hidden_size: int = 64):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class PPOAgentV2:
+    """
+    Standalone PPO agent used by train_ppo.py.
+    Keeps action and optional message policies separate while sharing one value head.
+    """
+
+    def __init__(
+        self,
+        obs_dim: int,
+        action_size: int = 2,
+        can_send: bool = False,
+        vocab_size: int = 2,
+        hidden_size: int = 64,
+        lr: float = 3e-4,
+    ):
+        self.obs_dim = int(obs_dim)
+        self.action_size = int(action_size)
+        self.can_send = bool(can_send)
+        self.vocab_size = int(vocab_size)
+
+        self.action_actor = _MLP(self.obs_dim, self.action_size, hidden_size=hidden_size).to(device)
+        self.value_net = _MLP(self.obs_dim, 1, hidden_size=hidden_size).to(device)
+        if self.can_send:
+            self.message_actor = _MLP(self.obs_dim, self.vocab_size, hidden_size=hidden_size).to(device)
+        else:
+            self.message_actor = None
+
+        params = list(self.action_actor.parameters()) + list(self.value_net.parameters())
+        if self.message_actor is not None:
+            params += list(self.message_actor.parameters())
+        self.optimizer = torch.optim.Adam(params, lr=lr)
+
+    def _obs_tensor(self, obs) -> torch.Tensor:
+        if isinstance(obs, torch.Tensor):
+            out = obs.to(device=device, dtype=torch.float32)
+        else:
+            out = torch.tensor(obs, dtype=torch.float32, device=device)
+        return out
+
+    def sample_action(self, obs):
+        obs_t = self._obs_tensor(obs)
+        logits = self.action_actor(obs_t)
+        dist = Categorical(logits=logits)
+        action = dist.sample()
+        value = self.value_net(obs_t).squeeze(-1)
+        probs = torch.softmax(logits, dim=-1)
+        return (
+            int(action.item()),
+            float(dist.log_prob(action).item()),
+            float(value.item()),
+            float(dist.entropy().item()),
+            probs.detach(),
+        )
+
+    def sample_message(self, obs):
+        if not self.can_send or self.message_actor is None:
+            return None, None, None, None
+        obs_t = self._obs_tensor(obs)
+        logits = self.message_actor(obs_t)
+        dist = Categorical(logits=logits)
+        msg = dist.sample()
+        probs = torch.softmax(logits, dim=-1)
+        return (
+            int(msg.item()),
+            float(dist.log_prob(msg).item()),
+            float(dist.entropy().item()),
+            probs.detach(),
+        )
+
+    def value(self, obs_batch: torch.Tensor) -> torch.Tensor:
+        return self.value_net(obs_batch).squeeze(-1)
+
+    def evaluate_actions(self, obs_batch: torch.Tensor, actions_batch: torch.Tensor):
+        logits = self.action_actor(obs_batch)
+        dist = Categorical(logits=logits)
+        log_probs = dist.log_prob(actions_batch)
+        entropy = dist.entropy()
+        values = self.value(obs_batch)
+        return log_probs, entropy, values
+
+    def evaluate_messages(self, obs_batch: torch.Tensor, messages_batch: torch.Tensor):
+        if not self.can_send or self.message_actor is None:
+            raise RuntimeError("evaluate_messages called for non-sender agent")
+        logits = self.message_actor(obs_batch)
+        dist = Categorical(logits=logits)
+        log_probs = dist.log_prob(messages_batch)
+        entropy = dist.entropy()
+        return log_probs, entropy
+
+    def action_distribution(self, obs_batch: torch.Tensor) -> torch.Tensor:
+        logits = self.action_actor(obs_batch)
+        return torch.softmax(logits, dim=-1)
+
+
+class PPOTrainer:
+    def __init__(
+        self,
+        agents,
+        lr: float = 3e-4,
+        clip_ratio: float = 0.2,
+        value_coeff: float = 0.5,
+        entropy_coeff: float = 0.01,
+        max_grad_norm: float = 0.5,
+        ppo_epochs: int = 4,
+        mini_batch_size: int = 32,
+        sign_lambda: float = 0.0,
+        list_lambda: float = 0.0,
+        message_entropy_target: float = None,
+    ):
+        del lr  # agents own optimizers; kept for API compatibility with plan text.
+        self.agents = agents
+        self.clip_ratio = float(clip_ratio)
+        self.value_coeff = float(value_coeff)
+        self.entropy_coeff = float(entropy_coeff)
+        self.max_grad_norm = float(max_grad_norm)
+        self.ppo_epochs = int(ppo_epochs)
+        self.mini_batch_size = int(mini_batch_size)
+        self.sign_lambda = float(sign_lambda)
+        self.list_lambda = float(list_lambda)
+        self.message_entropy_target = message_entropy_target
+
+    def _batched_indices(self, n_items: int):
+        order = torch.randperm(n_items, device=device)
+        for start in range(0, n_items, self.mini_batch_size):
+            yield order[start : start + self.mini_batch_size]
+
+    def update(self, buffer, advantages, returns):
+        T = buffer.t
+        metrics = {
+            "loss_total": 0.0,
+            "loss_policy": 0.0,
+            "loss_value": 0.0,
+            "entropy_action": 0.0,
+            "loss_message": 0.0,
+            "entropy_message": 0.0,
+        }
+        n_metric_updates = 0
+
+        if T == 0:
+            return metrics
+
+        adv_np = np.asarray(advantages[:T], dtype=np.float32)
+        ret_np = np.asarray(returns[:T], dtype=np.float32)
+
+        for agent_id, agent in self.agents.items():
+            idx = buffer.agent_to_idx[agent_id]
+
+            obs = torch.tensor(buffer.observations[:T, idx], dtype=torch.float32, device=device)
+            actions = torch.tensor(buffer.actions[:T, idx], dtype=torch.long, device=device)
+            old_log_probs = torch.tensor(buffer.log_probs[:T, idx], dtype=torch.float32, device=device)
+            returns_t = torch.tensor(ret_np[:T, idx], dtype=torch.float32, device=device)
+            adv_t = torch.tensor(adv_np[:T, idx], dtype=torch.float32, device=device)
+
+            if adv_t.numel() > 1:
+                adv_t = (adv_t - adv_t.mean()) / (adv_t.std(unbiased=False) + 1e-8)
+
+            list_bonus = torch.tensor(
+                buffer.listening_bonus[:T, idx], dtype=torch.float32, device=device
+            )
+
+            for _ in range(self.ppo_epochs):
+                for batch_idx in self._batched_indices(T):
+                    obs_b = obs[batch_idx]
+                    actions_b = actions[batch_idx]
+                    old_log_probs_b = old_log_probs[batch_idx]
+                    returns_b = returns_t[batch_idx]
+                    adv_b = adv_t[batch_idx]
+                    list_bonus_b = list_bonus[batch_idx]
+
+                    new_log_probs, entropy, values = agent.evaluate_actions(obs_b, actions_b)
+                    ratios = torch.exp(new_log_probs - old_log_probs_b)
+                    surr1 = ratios * adv_b
+                    surr2 = torch.clamp(
+                        ratios, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio
+                    ) * adv_b
+                    policy_loss = -torch.min(surr1, surr2).mean()
+                    value_loss = F.mse_loss(values, returns_b)
+                    entropy_bonus = entropy.mean()
+
+                    total_loss = (
+                        policy_loss
+                        + self.value_coeff * value_loss
+                        - self.entropy_coeff * entropy_bonus
+                    )
+
+                    if self.list_lambda != 0.0:
+                        # listening_bonus is negative by construction: larger magnitude means
+                        # stronger policy shift due to messages.
+                        total_loss = total_loss + self.list_lambda * list_bonus_b.mean()
+
+                    msg_loss_val = torch.tensor(0.0, device=device)
+                    msg_entropy_val = torch.tensor(0.0, device=device)
+                    if (
+                        agent.can_send
+                        and buffer.message_actions is not None
+                        and buffer.message_log_probs is not None
+                    ):
+                        msg_actions_all = torch.tensor(
+                            buffer.message_actions[:T, idx], dtype=torch.long, device=device
+                        )
+                        msg_mask_all = msg_actions_all >= 0
+                        msg_mask_b = msg_mask_all[batch_idx]
+                        if torch.any(msg_mask_b):
+                            obs_msg = obs_b[msg_mask_b]
+                            msg_actions_b = msg_actions_all[batch_idx][msg_mask_b]
+                            old_msg_lp_all = torch.tensor(
+                                buffer.message_log_probs[:T, idx],
+                                dtype=torch.float32,
+                                device=device,
+                            )
+                            old_msg_lp_b = old_msg_lp_all[batch_idx][msg_mask_b]
+                            msg_adv_b = adv_b[msg_mask_b]
+
+                            new_msg_lp, msg_entropy = agent.evaluate_messages(
+                                obs_msg, msg_actions_b
+                            )
+                            msg_ratio = torch.exp(new_msg_lp - old_msg_lp_b)
+                            msg_s1 = msg_ratio * msg_adv_b
+                            msg_s2 = torch.clamp(
+                                msg_ratio,
+                                1.0 - self.clip_ratio,
+                                1.0 + self.clip_ratio,
+                            ) * msg_adv_b
+                            msg_policy_loss = -torch.min(msg_s1, msg_s2).mean()
+                            msg_entropy_bonus = msg_entropy.mean()
+
+                            msg_sign_loss = torch.tensor(0.0, device=device)
+                            if self.sign_lambda != 0.0:
+                                if self.message_entropy_target is None:
+                                    h_target = np.log(agent.vocab_size) / 2.0
+                                else:
+                                    h_target = float(self.message_entropy_target)
+                                msg_sign_loss = ((h_target - msg_entropy) ** 2).mean()
+
+                            msg_loss_val = msg_policy_loss
+                            msg_entropy_val = msg_entropy_bonus
+                            total_loss = (
+                                total_loss
+                                + msg_policy_loss
+                                - self.entropy_coeff * msg_entropy_bonus
+                                + self.sign_lambda * msg_sign_loss
+                            )
+
+                    agent.optimizer.zero_grad()
+                    total_loss.backward()
+                    nn.utils.clip_grad_norm_(
+                        list(agent.action_actor.parameters())
+                        + list(agent.value_net.parameters())
+                        + (list(agent.message_actor.parameters()) if agent.message_actor is not None else []),
+                        self.max_grad_norm,
+                    )
+                    agent.optimizer.step()
+
+                    metrics["loss_total"] += float(total_loss.detach().item())
+                    metrics["loss_policy"] += float(policy_loss.detach().item())
+                    metrics["loss_value"] += float(value_loss.detach().item())
+                    metrics["entropy_action"] += float(entropy_bonus.detach().item())
+                    metrics["loss_message"] += float(msg_loss_val.detach().item())
+                    metrics["entropy_message"] += float(msg_entropy_val.detach().item())
+                    n_metric_updates += 1
+
+        if n_metric_updates > 0:
+            for key in metrics:
+                metrics[key] /= float(n_metric_updates)
+        return metrics

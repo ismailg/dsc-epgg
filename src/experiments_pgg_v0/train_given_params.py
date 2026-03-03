@@ -33,6 +33,7 @@ def setup_training_hyperparameters(args):
         n_epochs = EPOCHS,
         obs_size = OBS_SIZE,
         action_size = ACTION_SIZE,
+        normalize_obs = False,
         random_baseline = RANDOM_BASELINE,
         wandb_mode = WANDB_MODE
     )
@@ -116,7 +117,7 @@ def train(args, repo_name):
                     agent.buffer.next_states_a.append(observations[ag_idx])
                     agent.buffer.is_terminals.append(done)
                     agent.return_episode_norm += rewards_norm[ag_idx]
-                    agent.return_episode =+ rewards[ag_idx]
+                    agent.return_episode += rewards[ag_idx]
 
                 # break; if the episode is over
                 if done:
