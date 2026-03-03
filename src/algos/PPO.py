@@ -336,28 +336,21 @@ class PPOTrainer:
                     list_bonus_b = list_bonus[batch_idx]
 
                     new_log_probs, entropy, values = agent.evaluate_actions(obs_b, actions_b)
+                    value_loss = F.mse_loss(values, returns_b)
+                    entropy_bonus = entropy.mean()
+
+                    # Default (action-only) clipped surrogate.
                     ratios = torch.exp(new_log_probs - old_log_probs_b)
                     surr1 = ratios * adv_b
                     surr2 = torch.clamp(
                         ratios, 1.0 - self.clip_ratio, 1.0 + self.clip_ratio
                     ) * adv_b
-                    policy_loss = -torch.min(surr1, surr2).mean()
-                    value_loss = F.mse_loss(values, returns_b)
-                    entropy_bonus = entropy.mean()
-
-                    total_loss = (
-                        policy_loss
-                        + self.value_coeff * value_loss
-                        - self.entropy_coeff * entropy_bonus
-                    )
-
-                    if self.list_lambda != 0.0:
-                        # listening_bonus is negative by construction: larger magnitude means
-                        # stronger policy shift due to messages.
-                        total_loss = total_loss + self.list_lambda * list_bonus_b.mean()
+                    action_policy_loss = -torch.min(surr1, surr2).mean()
+                    policy_loss = action_policy_loss
 
                     msg_loss_val = torch.tensor(0.0, device=device)
                     msg_entropy_val = torch.tensor(0.0, device=device)
+                    msg_sign_loss = torch.tensor(0.0, device=device)
                     if (
                         agent.can_send
                         and buffer.message_actions is not None
@@ -382,17 +375,21 @@ class PPOTrainer:
                             new_msg_lp, msg_entropy = agent.evaluate_messages(
                                 obs_msg, msg_actions_b
                             )
-                            msg_ratio = torch.exp(new_msg_lp - old_msg_lp_b)
-                            msg_s1 = msg_ratio * msg_adv_b
-                            msg_s2 = torch.clamp(
-                                msg_ratio,
+
+                            # Joint sender decision objective: one clipped ratio over
+                            # log pi(a_t, m_t) = log pi(a_t) + log pi(m_t).
+                            joint_new_lp = new_log_probs[msg_mask_b] + new_msg_lp
+                            joint_old_lp = old_log_probs_b[msg_mask_b] + old_msg_lp_b
+                            joint_ratio = torch.exp(joint_new_lp - joint_old_lp)
+                            joint_s1 = joint_ratio * msg_adv_b
+                            joint_s2 = torch.clamp(
+                                joint_ratio,
                                 1.0 - self.clip_ratio,
                                 1.0 + self.clip_ratio,
                             ) * msg_adv_b
-                            msg_policy_loss = -torch.min(msg_s1, msg_s2).mean()
+                            joint_policy_loss = -torch.min(joint_s1, joint_s2).mean()
                             msg_entropy_bonus = msg_entropy.mean()
 
-                            msg_sign_loss = torch.tensor(0.0, device=device)
                             if self.sign_lambda != 0.0:
                                 if self.message_entropy_target is None:
                                     h_target = np.log(agent.vocab_size) / 2.0
@@ -400,14 +397,42 @@ class PPOTrainer:
                                     h_target = float(self.message_entropy_target)
                                 msg_sign_loss = ((h_target - msg_entropy) ** 2).mean()
 
-                            msg_loss_val = msg_policy_loss
+                            # Use joint objective for sender-updated samples. If any
+                            # unmasked items exist, blend with action-only objective.
+                            if torch.all(msg_mask_b):
+                                policy_loss = joint_policy_loss
+                            else:
+                                unmasked = ~msg_mask_b
+                                if torch.any(unmasked):
+                                    action_unmasked = -torch.min(
+                                        surr1[unmasked], surr2[unmasked]
+                                    ).mean()
+                                    n_joint = float(torch.sum(msg_mask_b).item())
+                                    n_action = float(torch.sum(unmasked).item())
+                                    policy_loss = (
+                                        joint_policy_loss * n_joint
+                                        + action_unmasked * n_action
+                                    ) / float(n_joint + n_action)
+                                else:
+                                    policy_loss = joint_policy_loss
+
+                            msg_loss_val = joint_policy_loss
                             msg_entropy_val = msg_entropy_bonus
-                            total_loss = (
-                                total_loss
-                                + msg_policy_loss
-                                - self.entropy_coeff * msg_entropy_bonus
-                                + self.sign_lambda * msg_sign_loss
-                            )
+
+                    total_loss = (
+                        policy_loss
+                        + self.value_coeff * value_loss
+                        - self.entropy_coeff * entropy_bonus
+                    )
+                    if msg_entropy_val.abs().item() > 0.0:
+                        total_loss = total_loss - self.entropy_coeff * msg_entropy_val
+                    if self.sign_lambda != 0.0:
+                        total_loss = total_loss + self.sign_lambda * msg_sign_loss
+
+                    if self.list_lambda != 0.0:
+                        # listening_bonus is negative by construction: larger magnitude means
+                        # stronger policy shift due to messages.
+                        total_loss = total_loss + self.list_lambda * list_bonus_b.mean()
 
                     agent.optimizer.zero_grad()
                     total_loss.backward()

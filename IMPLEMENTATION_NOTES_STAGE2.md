@@ -11,8 +11,9 @@
   - Added `PPOAgentV2`: separate action actor, optional message actor, shared value net.
   - Added `PPOTrainer`: clipped surrogate objective with value and entropy terms.
   - Joint comm objective:
-    - Action PPO objective always active.
-    - Message PPO objective active for sender agents when message samples/logprobs exist.
+    - For sender agents, PPO now uses a **joint clipped ratio** over
+      `log pi(a_t, m_t) = log pi(a_t) + log pi(m_t)`.
+    - Non-sender agents use standard action-only PPO objective.
   - Auxiliary terms:
     - Signaling entropy target penalty (`sign_lambda`).
     - Listening sensitivity penalty (`list_lambda`) using rollout-time policy shift.
@@ -32,9 +33,9 @@ For action policy:
 - Loss: `L = -surrogate + c_v * MSE(V, R) - c_e * entropy`
 
 For message policy (sender-only):
-- Same clipped surrogate construction on message log-probs.
-- Uses same per-step advantage as action branch.
-- Added to total loss with optional signaling regularizer.
+- Uses the same per-step advantage as action branch.
+- Combined with action policy via joint ratio for sender updates.
+- Message entropy bonus and optional signaling regularizer are added separately.
 
 ## Smoke validation commands
 
@@ -59,4 +60,3 @@ Observed:
 - Finite losses.
 - Non-collapsed action entropy.
 - Non-zero message-loss and message-entropy in comm run.
-
