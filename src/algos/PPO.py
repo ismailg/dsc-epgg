@@ -436,12 +436,14 @@ class PPOTrainer:
 
                     agent.optimizer.zero_grad()
                     total_loss.backward()
-                    nn.utils.clip_grad_norm_(
-                        list(agent.action_actor.parameters())
-                        + list(agent.value_net.parameters())
-                        + (list(agent.message_actor.parameters()) if agent.message_actor is not None else []),
-                        self.max_grad_norm,
-                    )
+                    # Clip actor/message and critic gradients separately so
+                    # large value-network gradients do not downscale policy updates.
+                    actor_params = list(agent.action_actor.parameters())
+                    if agent.message_actor is not None:
+                        actor_params += list(agent.message_actor.parameters())
+                    critic_params = list(agent.value_net.parameters())
+                    nn.utils.clip_grad_norm_(actor_params, self.max_grad_norm)
+                    nn.utils.clip_grad_norm_(critic_params, self.max_grad_norm)
                     agent.optimizer.step()
 
                     metrics["loss_total"] += float(total_loss.detach().item())

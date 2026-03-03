@@ -71,6 +71,7 @@ class TrainConfig:
     seed: int = 42
     log_interval: int = 10
     save_path: str = "outputs/ppo_agents.pt"
+    init_ckpt: str = ""
     lr_schedule: str = "none"  # one of: none, linear
     min_lr: float = 1e-5
     early_stop_patience: int = 0
@@ -163,6 +164,24 @@ def _build_agents(cfg: TrainConfig, obs_dim: int, sender_ids: List[str]):
     return agents
 
 
+def _maybe_load_agents(agents: Dict[str, PPOAgentV2], init_ckpt: str):
+    ckpt = str(init_ckpt or "").strip()
+    if ckpt == "":
+        return
+    if not os.path.exists(ckpt):
+        raise FileNotFoundError(f"init_ckpt not found: {ckpt}")
+    payload = torch.load(ckpt, map_location="cpu")
+    saved_agents = payload.get("agents", {})
+    for agent_id, agent in agents.items():
+        if agent_id not in saved_agents:
+            continue
+        saved = saved_agents[agent_id]
+        agent.action_actor.load_state_dict(saved["action_actor"])
+        agent.value_net.load_state_dict(saved["value_net"])
+        if agent.message_actor is not None and saved.get("message_actor") is not None:
+            agent.message_actor.load_state_dict(saved["message_actor"])
+
+
 def _save_agents(path: str, agents: Dict[str, PPOAgentV2], cfg: TrainConfig):
     save_dir = os.path.dirname(path)
     if save_dir:
@@ -222,6 +241,7 @@ def _single_run(cfg: TrainConfig):
         default_endowment=cfg.endowment,
     )
     agents = _build_agents(cfg, obs_dim=wrapper.obs_dim, sender_ids=sender_ids)
+    _maybe_load_agents(agents=agents, init_ckpt=cfg.init_ckpt)
     if cfg.lr_schedule == "linear":
         _set_agents_lr(agents, cfg.lr)
     ppo = PPOTrainer(
@@ -513,6 +533,7 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--save_path", type=str, default="outputs/ppo_agents.pt")
+    parser.add_argument("--init_ckpt", type=str, default="")
     parser.add_argument("--lr_schedule", type=str, choices=["none", "linear"], default="none")
     parser.add_argument("--min_lr", type=float, default=1e-5)
     parser.add_argument("--early_stop_patience", type=int, default=0)
@@ -565,6 +586,7 @@ def args_to_config(args) -> TrainConfig:
         seed=args.seed,
         log_interval=args.log_interval,
         save_path=args.save_path,
+        init_ckpt=args.init_ckpt,
         lr_schedule=args.lr_schedule,
         min_lr=args.min_lr,
         early_stop_patience=args.early_stop_patience,
