@@ -140,6 +140,17 @@ def run_baseline1(
         "regime_decode_accuracy_mean": float(np.mean(regime_acc)),
         "regime_decode_accuracy_std": float(np.std(regime_acc)),
         "cbar_table": cbar.tolist(),
+        "evaluation_protocol": {
+            "horizons_supported": [1],
+            "alignment": "predict_a_tplus1_from_pi_t",
+            "input_mode": "teacher_forced_observations",
+            "open_loop_supported": False,
+            "notes": (
+                "Baseline-1 scaffold currently supports one-step evaluation only. "
+                "Spec-required multi-step H={5,10,20} and teacher-forced vs open-loop "
+                "modes are pending."
+            ),
+        },
     }
 
 

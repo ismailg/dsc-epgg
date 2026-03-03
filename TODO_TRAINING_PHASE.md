@@ -34,6 +34,9 @@
 - [ ] For each `(condition, seed)`, generate 500 evaluation sessions with session logging.
 - [ ] Consolidate to one `.npz` per `(condition, seed)`.
 - [ ] Run Baseline 1 on these datasets and store JSON summaries.
+- [ ] Extend Baseline 1 evaluation beyond scaffold:
+  - add multi-step horizons `H ∈ {5, 10, 20}`;
+  - report both teacher-forced and open-loop modes.
 
 5. Dynamic Richness Checklist gate (must pass before PLRNN)
 - [ ] Regime-separated cooperation differences present.

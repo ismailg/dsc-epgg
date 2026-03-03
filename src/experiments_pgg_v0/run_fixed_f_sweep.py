@@ -74,6 +74,8 @@ def _build_job(args, f_value: float, seed: int) -> FixedFJob:
         args.lr_schedule,
         "--min_lr",
         str(args.min_lr),
+        "--reward_scale",
+        str(args.reward_scale),
     ]
     if args.comm_enabled:
         cmd.extend(["--comm_enabled", "--vocab_size", str(args.vocab_size)])
@@ -136,7 +138,7 @@ def _run_job(job: FixedFJob, cwd: str) -> Dict:
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--f_values", nargs="*", type=float, default=[0.5, 1.5, 2.5, 3.5])
+    p.add_argument("--f_values", nargs="*", type=float, default=[0.5, 1.5, 2.5, 3.5, 5.0])
     p.add_argument("--seeds", nargs="*", type=int, default=[101])
     p.add_argument("--n_episodes", type=int, default=50000)
     p.add_argument("--T", type=int, default=100)
@@ -148,6 +150,7 @@ def parse_args():
     p.add_argument("--vocab_size", type=int, default=2)
     p.add_argument("--gamma", type=float, default=0.99)
     p.add_argument("--lam", type=float, default=0.95)
+    p.add_argument("--reward_scale", type=float, default=20.0)
     p.add_argument("--log_interval", type=int, default=500)
     p.add_argument("--regime_log_interval", type=int, default=500)
     p.add_argument("--lr_schedule", type=str, choices=["none", "linear"], default="linear")
