@@ -488,10 +488,41 @@ def _fmt_num(v) -> str:
         return "NA"
 
 
+def _phase2_gate_status(min_episode: int, min_gap: float) -> Tuple[bool, str]:
+    ep_map = _parse_episode_lines(_stage2_log_path())
+    if len(ep_map) == 0:
+        return False, "stage2 log unavailable"
+
+    eligible = sorted([ep for ep in ep_map.keys() if ep >= int(min_episode)])
+    if len(eligible) == 0:
+        return False, f"stage2 below gate episode threshold ({max(ep_map.keys())} < {min_episode})"
+
+    ep = int(eligible[-1])
+    row = ep_map[ep]
+    req = ("reg_comp", "reg_mixed", "reg_coop")
+    if not all(k in row for k in req):
+        return False, f"stage2 ep={ep} has no regime-split metrics yet"
+
+    comp = float(row["reg_comp"])
+    mixed = float(row["reg_mixed"])
+    coop = float(row["reg_coop"])
+    gap = coop - comp
+    ordered = (coop > mixed) and (mixed > comp)
+    separated = gap >= float(min_gap)
+    ok = bool(ordered and separated)
+    reason = (
+        f"stage2 ep={ep} comp={comp:.3f} mixed={mixed:.3f} coop={coop:.3f} "
+        f"gap={gap:.3f} ordered={ordered} separated={separated}"
+    )
+    return ok, reason
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--poll_sec", type=int, default=30)
-    parser.add_argument("--skip_grid", action="store_true")
+    parser.add_argument("--run_grid_after_phase2_gate", action="store_true")
+    parser.add_argument("--phase2_gate_min_episode", type=int, default=50000)
+    parser.add_argument("--phase2_gate_min_gap", type=float, default=0.20)
     parser.add_argument("--max_total_trainers", type=int, default=9)
     parser.add_argument("--fixedf_workers_with_stage2", type=int, default=4)
     parser.add_argument("--fixedf_workers_without_stage2", type=int, default=6)
@@ -596,9 +627,21 @@ def main():
     _update_stage2_checkpoints()
 
     # Task 5: cond6 + cond2 baseline loops.
-    if not args.skip_grid:
-        _run_condition_loop("cond6", [101, 202, 303, 404, 505], failures)
-        _run_condition_loop("cond2", [101, 202, 303, 404, 505], failures)
+    if args.run_grid_after_phase2_gate:
+        ok, gate_reason = _phase2_gate_status(
+            min_episode=args.phase2_gate_min_episode,
+            min_gap=args.phase2_gate_min_gap,
+        )
+        _log(f"phase2 gate: {gate_reason}")
+        if ok:
+            _run_condition_loop("cond6", [101, 202, 303, 404, 505], failures)
+            _run_condition_loop("cond2", [101, 202, 303, 404, 505], failures)
+        else:
+            msg = "phase2 gate not met; skipped cond6/cond2 grids"
+            failures.append(msg)
+            _log(msg)
+    else:
+        _log("cond6/cond2 grids disabled by default; use --run_grid_after_phase2_gate to enable.")
 
     _update_stage2_checkpoints()
     _write_summary(failures)
