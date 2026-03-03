@@ -179,15 +179,17 @@ class PPOAgentV2:
         can_send: bool = False,
         vocab_size: int = 2,
         hidden_size: int = 64,
+        value_obs_dim: int = None,
         lr: float = 3e-4,
     ):
         self.obs_dim = int(obs_dim)
+        self.value_obs_dim = int(value_obs_dim) if value_obs_dim is not None else int(obs_dim)
         self.action_size = int(action_size)
         self.can_send = bool(can_send)
         self.vocab_size = int(vocab_size)
 
         self.action_actor = _MLP(self.obs_dim, self.action_size, hidden_size=hidden_size).to(device)
-        self.value_net = _MLP(self.obs_dim, 1, hidden_size=hidden_size).to(device)
+        self.value_net = _MLP(self.value_obs_dim, 1, hidden_size=hidden_size).to(device)
         if self.can_send:
             self.message_actor = _MLP(self.obs_dim, self.vocab_size, hidden_size=hidden_size).to(device)
         else:
@@ -205,12 +207,16 @@ class PPOAgentV2:
             out = torch.tensor(obs, dtype=torch.float32, device=device)
         return out
 
-    def sample_action(self, obs):
+    def sample_action(self, obs, value_obs=None):
         obs_t = self._obs_tensor(obs)
         logits = self.action_actor(obs_t)
         dist = Categorical(logits=logits)
         action = dist.sample()
-        value = self.value_net(obs_t).squeeze(-1)
+        if value_obs is None:
+            value_t = obs_t
+        else:
+            value_t = self._obs_tensor(value_obs)
+        value = self.value_net(value_t).squeeze(-1)
         probs = torch.softmax(logits, dim=-1)
         return (
             int(action.item()),
@@ -238,12 +244,17 @@ class PPOAgentV2:
     def value(self, obs_batch: torch.Tensor) -> torch.Tensor:
         return self.value_net(obs_batch).squeeze(-1)
 
-    def evaluate_actions(self, obs_batch: torch.Tensor, actions_batch: torch.Tensor):
+    def evaluate_actions(
+        self,
+        obs_batch: torch.Tensor,
+        actions_batch: torch.Tensor,
+        value_obs_batch: torch.Tensor = None,
+    ):
         logits = self.action_actor(obs_batch)
         dist = Categorical(logits=logits)
         log_probs = dist.log_prob(actions_batch)
         entropy = dist.entropy()
-        values = self.value(obs_batch)
+        values = self.value(value_obs_batch if value_obs_batch is not None else obs_batch)
         return log_probs, entropy, values
 
     def evaluate_messages(self, obs_batch: torch.Tensor, messages_batch: torch.Tensor):
@@ -274,6 +285,7 @@ class PPOTrainer:
         sign_lambda: float = 0.0,
         list_lambda: float = 0.0,
         message_entropy_target: float = None,
+        normalize_value_loss: bool = True,
     ):
         del lr  # agents own optimizers; kept for API compatibility with plan text.
         self.agents = agents
@@ -286,6 +298,7 @@ class PPOTrainer:
         self.sign_lambda = float(sign_lambda)
         self.list_lambda = float(list_lambda)
         self.message_entropy_target = message_entropy_target
+        self.normalize_value_loss = bool(normalize_value_loss)
 
     def _batched_indices(self, n_items: int):
         order = torch.randperm(n_items, device=device)
@@ -314,6 +327,9 @@ class PPOTrainer:
             idx = buffer.agent_to_idx[agent_id]
 
             obs = torch.tensor(buffer.observations[:T, idx], dtype=torch.float32, device=device)
+            value_obs = torch.tensor(
+                buffer.value_observations[:T, idx], dtype=torch.float32, device=device
+            )
             actions = torch.tensor(buffer.actions[:T, idx], dtype=torch.long, device=device)
             old_log_probs = torch.tensor(buffer.log_probs[:T, idx], dtype=torch.float32, device=device)
             returns_t = torch.tensor(ret_np[:T, idx], dtype=torch.float32, device=device)
@@ -329,14 +345,25 @@ class PPOTrainer:
             for _ in range(self.ppo_epochs):
                 for batch_idx in self._batched_indices(T):
                     obs_b = obs[batch_idx]
+                    value_obs_b = value_obs[batch_idx]
                     actions_b = actions[batch_idx]
                     old_log_probs_b = old_log_probs[batch_idx]
                     returns_b = returns_t[batch_idx]
                     adv_b = adv_t[batch_idx]
                     list_bonus_b = list_bonus[batch_idx]
 
-                    new_log_probs, entropy, values = agent.evaluate_actions(obs_b, actions_b)
-                    value_loss = F.mse_loss(values, returns_b)
+                    new_log_probs, entropy, values = agent.evaluate_actions(
+                        obs_b, actions_b, value_obs_batch=value_obs_b
+                    )
+                    if self.normalize_value_loss:
+                        ret_mean = returns_b.mean()
+                        ret_std = returns_b.std(unbiased=False) + 1e-8
+                        value_loss = F.mse_loss(
+                            (values - ret_mean) / ret_std,
+                            (returns_b - ret_mean) / ret_std,
+                        )
+                    else:
+                        value_loss = F.mse_loss(values, returns_b)
                     entropy_bonus = entropy.mean()
 
                     # Default (action-only) clipped surrogate.

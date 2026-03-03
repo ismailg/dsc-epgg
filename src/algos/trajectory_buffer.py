@@ -15,6 +15,7 @@ class TrajectoryBuffer:
         agent_ids: Iterable[str],
         T: int,
         obs_dim: int,
+        value_obs_dim: Optional[int] = None,
         comm_enabled: bool = False,
         vocab_size: int = 0,
         sender_ids: Optional[Iterable[str]] = None,
@@ -24,8 +25,12 @@ class TrajectoryBuffer:
         self.n_agents = len(self.agent_ids)
         self.T = int(T)
         self.obs_dim = int(obs_dim)
+        self.value_obs_dim = int(value_obs_dim) if value_obs_dim is not None else int(obs_dim)
 
         self.observations = np.zeros((self.T, self.n_agents, self.obs_dim), dtype=np.float32)
+        self.value_observations = np.zeros(
+            (self.T, self.n_agents, self.value_obs_dim), dtype=np.float32
+        )
         self.actions = np.zeros((self.T, self.n_agents), dtype=np.int32)
         self.rewards = np.zeros((self.T, self.n_agents), dtype=np.float32)
         self.values = np.zeros((self.T, self.n_agents), dtype=np.float32)
@@ -73,6 +78,8 @@ class TrajectoryBuffer:
         flips: Dict[str, bool],
         true_f: float,
         f_hats: Dict[str, np.ndarray],
+        raw_rewards: Optional[Dict[str, float]] = None,
+        value_obs: Optional[Dict[str, np.ndarray]] = None,
         messages: Optional[Dict[str, int]] = None,
         message_actions: Optional[Dict[str, int]] = None,
         message_log_probs: Optional[Dict[str, float]] = None,
@@ -84,9 +91,18 @@ class TrajectoryBuffer:
         for agent_id in self.agent_ids:
             i = self._agent_index(agent_id)
             self.observations[self.t, i] = np.asarray(obs[agent_id], dtype=np.float32)
+            if value_obs is not None:
+                self.value_observations[self.t, i] = np.asarray(
+                    value_obs[agent_id], dtype=np.float32
+                )
+            else:
+                self.value_observations[self.t, i] = np.asarray(obs[agent_id], dtype=np.float32)
             self.actions[self.t, i] = int(actions[agent_id])
             self.rewards[self.t, i] = float(rewards[agent_id])
-            self.agent_rewards[self.t, i] = float(rewards[agent_id])
+            if raw_rewards is not None:
+                self.agent_rewards[self.t, i] = float(raw_rewards[agent_id])
+            else:
+                self.agent_rewards[self.t, i] = float(rewards[agent_id])
             self.values[self.t, i] = float(values[agent_id])
             self.log_probs[self.t, i] = float(log_probs[agent_id])
             self.executed_actions[self.t, i] = int(executed_actions[agent_id])
@@ -155,4 +171,3 @@ class TrajectoryBuffer:
 
     def reset(self) -> None:
         self.t = 0
-

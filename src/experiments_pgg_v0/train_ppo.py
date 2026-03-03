@@ -56,6 +56,7 @@ class TrainConfig:
     msg_dropout: float = 0.1
 
     hidden_size: int = 64
+    value_time_feature: bool = True
     lr: float = 3e-4
     gamma: float = 0.99
     lam: float = 0.95
@@ -72,6 +73,7 @@ class TrainConfig:
     log_interval: int = 10
     save_path: str = "outputs/ppo_agents.pt"
     init_ckpt: str = ""
+    reward_scale: float = 20.0
     lr_schedule: str = "none"  # one of: none, linear
     min_lr: float = 1e-5
     early_stop_patience: int = 0
@@ -151,6 +153,7 @@ def _build_env(cfg: TrainConfig):
 
 
 def _build_agents(cfg: TrainConfig, obs_dim: int, sender_ids: List[str]):
+    value_obs_dim = obs_dim + (1 if cfg.value_time_feature else 0)
     agents = {}
     for agent_id in _agent_ids(cfg.n_agents):
         agents[agent_id] = PPOAgentV2(
@@ -159,9 +162,19 @@ def _build_agents(cfg: TrainConfig, obs_dim: int, sender_ids: List[str]):
             can_send=(cfg.comm_enabled and agent_id in sender_ids),
             vocab_size=cfg.vocab_size,
             hidden_size=cfg.hidden_size,
+            value_obs_dim=value_obs_dim,
             lr=cfg.lr,
         )
     return agents
+
+
+def _safe_load_state_dict(module: torch.nn.Module, loaded: Dict):
+    current = module.state_dict()
+    compatible = {}
+    for key, tensor in loaded.items():
+        if key in current and tuple(current[key].shape) == tuple(tensor.shape):
+            compatible[key] = tensor
+    module.load_state_dict(compatible, strict=False)
 
 
 def _maybe_load_agents(agents: Dict[str, PPOAgentV2], init_ckpt: str):
@@ -176,10 +189,10 @@ def _maybe_load_agents(agents: Dict[str, PPOAgentV2], init_ckpt: str):
         if agent_id not in saved_agents:
             continue
         saved = saved_agents[agent_id]
-        agent.action_actor.load_state_dict(saved["action_actor"])
-        agent.value_net.load_state_dict(saved["value_net"])
+        _safe_load_state_dict(agent.action_actor, saved["action_actor"])
+        _safe_load_state_dict(agent.value_net, saved["value_net"])
         if agent.message_actor is not None and saved.get("message_actor") is not None:
-            agent.message_actor.load_state_dict(saved["message_actor"])
+            _safe_load_state_dict(agent.message_actor, saved["message_actor"])
 
 
 def _save_agents(path: str, agents: Dict[str, PPOAgentV2], cfg: TrainConfig):
@@ -229,6 +242,9 @@ def _single_run(cfg: TrainConfig):
     _seed_everything(cfg.seed)
     agent_ids = _agent_ids(cfg.n_agents)
     sender_ids = _sender_ids(cfg)
+    value_obs_dim = (5 + len(sender_ids) * cfg.vocab_size if cfg.comm_enabled else 5) + (
+        1 if cfg.value_time_feature else 0
+    )
 
     env = _build_env(cfg)
     wrapper = ObservationWrapper(
@@ -292,6 +308,7 @@ def _single_run(cfg: TrainConfig):
             agent_ids=agent_ids,
             T=cfg.T,
             obs_dim=wrapper.obs_dim,
+            value_obs_dim=value_obs_dim,
             comm_enabled=cfg.comm_enabled,
             vocab_size=cfg.vocab_size,
             sender_ids=sender_ids,
@@ -334,9 +351,18 @@ def _single_run(cfg: TrainConfig):
             action_log_probs = {}
             values = {}
             listening_bonus = {agent_id: 0.0 for agent_id in agent_ids}
+            t_frac = float(steps) / float(max(1, cfg.T - 1))
+            value_aug_obs = {}
+            for agent_id in agent_ids:
+                if cfg.value_time_feature:
+                    value_aug_obs[agent_id] = np.concatenate(
+                        [aug_obs[agent_id], np.array([t_frac], dtype=np.float32)], axis=0
+                    ).astype(np.float32)
+                else:
+                    value_aug_obs[agent_id] = aug_obs[agent_id]
             for agent_id in agent_ids:
                 action, action_lp, value, _ent, _ = agents[agent_id].sample_action(
-                    aug_obs[agent_id]
+                    aug_obs[agent_id], value_obs=value_aug_obs[agent_id]
                 )
                 intended_actions[agent_id] = int(action)
                 action_log_probs[agent_id] = float(action_lp)
@@ -362,7 +388,11 @@ def _single_run(cfg: TrainConfig):
                     )
 
             raw_obs_next, rewards, done, infos = env.step(intended_actions)
-            rewards = _to_float_rewards(rewards)
+            rewards_raw = _to_float_rewards(rewards)
+            rewards_train = {
+                agent_id: (rewards_raw[agent_id] / float(cfg.reward_scale))
+                for agent_id in agent_ids
+            }
             executed_actions = infos.get("executed_actions", intended_actions)
             flips = infos.get("flips", {agent_id: False for agent_id in agent_ids})
             true_f = float(infos.get("true_f", env.current_multiplier.item()))
@@ -372,7 +402,8 @@ def _single_run(cfg: TrainConfig):
             buffer.store(
                 obs=aug_obs,
                 actions=intended_actions,
-                rewards=rewards,
+                rewards=rewards_train,
+                raw_rewards=rewards_raw,
                 values=values,
                 log_probs=action_log_probs,
                 done=bool(done),
@@ -381,6 +412,7 @@ def _single_run(cfg: TrainConfig):
                 true_f=true_f,
                 f_hats=raw_obs,
                 messages=current_messages,
+                value_obs=value_aug_obs,
                 message_actions=message_actions if len(message_actions) > 0 else None,
                 message_log_probs=message_log_probs if len(message_log_probs) > 0 else None,
                 listening_bonus=listening_bonus,
@@ -395,12 +427,23 @@ def _single_run(cfg: TrainConfig):
                 agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
                 for agent_id in agent_ids
             }
+            t_frac = float(steps) / float(max(1, cfg.T - 1))
+            final_value_obs = {
+                agent_id: (
+                    np.concatenate(
+                        [final_aug_obs[agent_id], np.array([t_frac], dtype=np.float32)], axis=0
+                    ).astype(np.float32)
+                    if cfg.value_time_feature
+                    else final_aug_obs[agent_id]
+                )
+                for agent_id in agent_ids
+            }
             last_values = np.array(
                 [
                     agents[agent_id]
                     .value(
                         torch.tensor(
-                            final_aug_obs[agent_id], dtype=torch.float32, device=agents[agent_id].action_actor.net[0].weight.device
+                            final_value_obs[agent_id], dtype=torch.float32, device=agents[agent_id].action_actor.net[0].weight.device
                         ).unsqueeze(0)
                     )
                     .detach()
@@ -519,6 +562,7 @@ def parse_args():
     parser.add_argument("--vocab_size", type=int, default=2)
     parser.add_argument("--msg_dropout", type=float, default=0.1)
     parser.add_argument("--hidden_size", type=int, default=64)
+    parser.add_argument("--disable_value_time_feature", action="store_true")
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--lam", type=float, default=0.95)
@@ -534,6 +578,7 @@ def parse_args():
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--save_path", type=str, default="outputs/ppo_agents.pt")
     parser.add_argument("--init_ckpt", type=str, default="")
+    parser.add_argument("--reward_scale", type=float, default=20.0)
     parser.add_argument("--lr_schedule", type=str, choices=["none", "linear"], default="none")
     parser.add_argument("--min_lr", type=float, default=1e-5)
     parser.add_argument("--early_stop_patience", type=int, default=0)
@@ -572,6 +617,7 @@ def args_to_config(args) -> TrainConfig:
         vocab_size=args.vocab_size,
         msg_dropout=args.msg_dropout,
         hidden_size=args.hidden_size,
+        value_time_feature=not bool(args.disable_value_time_feature),
         lr=args.lr,
         gamma=args.gamma,
         lam=args.lam,
@@ -587,6 +633,7 @@ def args_to_config(args) -> TrainConfig:
         log_interval=args.log_interval,
         save_path=args.save_path,
         init_ckpt=args.init_ckpt,
+        reward_scale=args.reward_scale,
         lr_schedule=args.lr_schedule,
         min_lr=args.min_lr,
         early_stop_patience=args.early_stop_patience,
@@ -605,6 +652,8 @@ def args_to_config(args) -> TrainConfig:
     )
     if len(cfg.sigmas) != cfg.n_agents:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
+    if cfg.reward_scale <= 0:
+        raise ValueError("reward_scale must be > 0")
     if cfg.n_senders < 0 or cfg.n_senders > cfg.n_agents:
         raise ValueError("n_senders must be in [0, n_agents]")
     if cfg.comm_enabled and cfg.n_senders <= 0:
