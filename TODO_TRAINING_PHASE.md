@@ -5,35 +5,48 @@
 - [x] Condition 2 shakedown: no comm, symmetric uncertainty, tremble=0.05 (seed 101, 300 episodes)
 - [x] Condition 1 shakedown: comm on, symmetric uncertainty, tremble=0.05 (seed 101, 300 episodes)
 - [x] All three runs completed without NaN/crash.
+- [x] Gamma stability fix validated: fixed `f=5.0`, `gamma=0.99` reaches cooperation ~1.0 in sanity run.
+- [x] Regime-conditional evaluator implemented (`src/analysis/evaluate_regime_conditional.py`).
+- [x] Streaming regime/f-value metrics integrated into trainer (`train_ppo.py`, JSONL + periodic summaries).
+- [x] Baseline 1 scaffold implemented (`src/baselines/bayes_filter.py`, `src/analysis/run_bayesian_baseline1.py`).
+- [x] Fixed-`f` sweep launcher added (`src/experiments_pgg_v0/run_fixed_f_sweep.py`).
 
 ## Next (required before PLRNN)
-1. Build evaluation script for regime-conditional behavior checks
-- [ ] Compute cooperation rate by true `f_t` and regime.
-- [ ] Compute per-agent cooperation and reward stats.
-- [ ] Confirm Condition 6 shows policy separation across regimes.
+1. Complete Stage-1 fixed-`f` validation (Phase 1)
+- [ ] Finish/verify fixed `f=5.0` long run checkpoint.
+- [ ] Run fixed `f ∈ {0.5, 1.5, 2.5, 3.5}` with seed `101` (50k episodes).
+- [ ] Check expected behavior by regime:
+  - `f=0.5`: near-zero cooperation.
+  - `f=5.0`: near-one cooperation.
+  - `f=1.5` and `f=2.5/3.5`: intermediate or transitioning behavior.
 
-2. Launch multi-seed baseline training
-- [ ] Run seeds `{101, 202, 303, 404, 505}` for Condition 6.
-- [ ] Run seeds `{101, 202, 303, 404, 505}` for Condition 2.
-- [ ] Run seeds `{101, 202, 303, 404, 505}` for Condition 1.
-- [ ] Start with 2,000 episodes per run (`T=100`), then scale if needed.
+2. Complete Stage-2 switching training diagnostics (Phase 2)
+- [ ] Continue 200k switching run from warm start.
+- [ ] Monitor regime-separated cooperation at 50k/100k/150k/200k from metrics JSONL.
+- [ ] Verify no collapse to unconditional policy (regime curves should separate).
 
-3. Generate evaluation datasets for model-comparison stage
-- [ ] For each (condition, seed), collect 500 logged sessions.
-- [ ] Consolidate to one file per (condition, seed).
+3. Scale baseline grid from pilot to full multi-seed
+- [ ] Run Conditions `{6, 2, 1}` × seeds `{101, 202, 303, 404, 505}` at 2k episodes if not already complete.
+- [ ] Increase episode budget once learning curves indicate undertraining.
+- [ ] Keep per-run logs/checkpoints and aggregate summaries.
 
-4. Run Dynamic Richness Checklist gate
+4. Prepare data products for baseline and PLRNN comparisons
+- [ ] For each `(condition, seed)`, generate 500 evaluation sessions with session logging.
+- [ ] Consolidate to one `.npz` per `(condition, seed)`.
+- [ ] Run Baseline 1 on these datasets and store JSON summaries.
+
+5. Dynamic Richness Checklist gate (must pass before PLRNN)
 - [ ] Regime-separated cooperation differences present.
 - [ ] History terms significant (`k_{t-1:t-3}`).
 - [ ] Non-trivial within-session transitions.
 - [ ] MI(message; f) and MI(message; action) > 0 for comm condition.
 - [ ] Non-negligible agent heterogeneity.
 
-5. Decide escalation only if checklist fails
-- [ ] Increase `rho` first.
+6. Escalation only if checklist fails
+- [ ] Increase `rho`.
 - [ ] Increase `sigma`.
-- [ ] Add lag features (`k_{t-2}`, `k_{t-3}`) if needed.
-- [ ] Increase tremble/dropout if still too trivial.
+- [ ] Add lag features (`k_{t-2}`, `k_{t-3}`).
+- [ ] Increase tremble/dropout.
 
 ## Baseline run templates
 

@@ -89,6 +89,8 @@ class TrainConfig:
     use_wandb: bool = False
     wandb_project: str = "dsc-epgg"
     wandb_mode: str = "offline"
+    regime_log_interval: int = 500
+    metrics_jsonl_path: str = ""
 
 
 def minimal_test_config(**overrides):
@@ -129,6 +131,47 @@ def _safe_is_finite(metrics: Dict[str, float]) -> bool:
         if not math.isfinite(float(val)):
             return False
     return True
+
+
+def _regime_label(true_f: float, n_agents: int) -> str:
+    if true_f <= 1.0:
+        return "competitive"
+    if true_f <= float(n_agents):
+        return "mixed"
+    return "cooperative"
+
+
+def _bucket() -> Dict[str, float]:
+    return {"n_rounds": 0.0, "coop_sum": 0.0, "reward_sum": 0.0}
+
+
+def _update_bucket(acc: Dict[str, Dict[str, float]], key: str, coop: float, reward: float):
+    if key not in acc:
+        acc[key] = _bucket()
+    acc[key]["n_rounds"] += 1.0
+    acc[key]["coop_sum"] += float(coop)
+    acc[key]["reward_sum"] += float(reward)
+
+
+def _readout_bucket(acc: Dict[str, Dict[str, float]], key: str) -> Dict[str, float]:
+    bucket = acc.get(key, _bucket())
+    n = int(bucket["n_rounds"])
+    denom = max(1, n)
+    return {
+        "n_rounds": n,
+        "coop_rate": float(bucket["coop_sum"] / float(denom)),
+        "avg_reward": float(bucket["reward_sum"] / float(denom)),
+    }
+
+
+def _append_jsonl(path: str, row: Dict):
+    if str(path or "").strip() == "":
+        return
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(row) + "\n")
 
 
 def _set_agents_lr(agents: Dict[str, PPOAgentV2], lr_value: float):
@@ -295,6 +338,10 @@ def _single_run(cfg: TrainConfig):
             wandb_run = None
 
     metrics_over_time = []
+    cumulative_regime_acc = {label: _bucket() for label in ("competitive", "mixed", "cooperative")}
+    window_regime_acc = {label: _bucket() for label in ("competitive", "mixed", "cooperative")}
+    cumulative_f_acc: Dict[str, Dict[str, float]] = {}
+    window_f_acc: Dict[str, Dict[str, float]] = {}
     best_metric = -float("inf")
     stale_epochs = 0
     for episode in range(cfg.n_episodes):
@@ -466,6 +513,27 @@ def _single_run(cfg: TrainConfig):
 
         coop_rate = float(np.mean(buffer.executed_actions[: buffer.t])) if buffer.t > 0 else 0.0
         avg_reward = float(np.mean(buffer.agent_rewards[: buffer.t])) if buffer.t > 0 else 0.0
+        episode_regime_acc = {
+            "competitive": _bucket(),
+            "mixed": _bucket(),
+            "cooperative": _bucket(),
+        }
+        if buffer.t > 0:
+            coop_per_step = np.mean(buffer.executed_actions[: buffer.t], axis=1)
+            reward_per_step = np.mean(buffer.agent_rewards[: buffer.t], axis=1)
+            for t in range(buffer.t):
+                f_val = float(buffer.true_f[t])
+                regime = _regime_label(f_val, n_agents=cfg.n_agents)
+                coop_t = float(coop_per_step[t])
+                rew_t = float(reward_per_step[t])
+
+                _update_bucket(episode_regime_acc, regime, coop_t, rew_t)
+                _update_bucket(cumulative_regime_acc, regime, coop_t, rew_t)
+                _update_bucket(window_regime_acc, regime, coop_t, rew_t)
+
+                f_key = f"{f_val:.3f}"
+                _update_bucket(cumulative_f_acc, f_key, coop_t, rew_t)
+                _update_bucket(window_f_acc, f_key, coop_t, rew_t)
         episode_metrics = {
             "episode": episode,
             "steps": buffer.t,
@@ -473,6 +541,11 @@ def _single_run(cfg: TrainConfig):
             "avg_reward": avg_reward,
             **train_metrics,
         }
+        for regime in ("competitive", "mixed", "cooperative"):
+            view = _readout_bucket(episode_regime_acc, regime)
+            episode_metrics[f"regime_{regime}_rounds"] = int(view["n_rounds"])
+            episode_metrics[f"regime_{regime}_coop"] = float(view["coop_rate"])
+            episode_metrics[f"regime_{regime}_reward"] = float(view["avg_reward"])
         metrics_over_time.append(episode_metrics)
         if wandb_run is not None:
             wandb_run.log(episode_metrics, step=episode)
@@ -483,6 +556,86 @@ def _single_run(cfg: TrainConfig):
                 f"coop={coop_rate:.3f} avg_reward={avg_reward:.3f} "
                 f"loss={train_metrics['loss_total']:.4f}"
             )
+
+        if (episode + 1) % max(1, cfg.regime_log_interval) == 0:
+            summary_chunks = []
+            for regime in ("competitive", "mixed", "cooperative"):
+                win = _readout_bucket(window_regime_acc, regime)
+                summary_chunks.append(
+                    f"{regime[:4]}={win['coop_rate']:.3f}(n={int(win['n_rounds'])})"
+                )
+                _append_jsonl(
+                    cfg.metrics_jsonl_path,
+                    {
+                        "episode": int(episode + 1),
+                        "seed": int(cfg.seed),
+                        "condition": str(cfg.condition_name),
+                        "scope": "regime",
+                        "key": regime,
+                        "window": "window",
+                        "n_rounds": int(win["n_rounds"]),
+                        "coop_rate": float(win["coop_rate"]),
+                        "avg_reward": float(win["avg_reward"]),
+                    },
+                )
+                cum = _readout_bucket(cumulative_regime_acc, regime)
+                _append_jsonl(
+                    cfg.metrics_jsonl_path,
+                    {
+                        "episode": int(episode + 1),
+                        "seed": int(cfg.seed),
+                        "condition": str(cfg.condition_name),
+                        "scope": "regime",
+                        "key": regime,
+                        "window": "cumulative",
+                        "n_rounds": int(cum["n_rounds"]),
+                        "coop_rate": float(cum["coop_rate"]),
+                        "avg_reward": float(cum["avg_reward"]),
+                    },
+                )
+
+            for f_key in sorted(window_f_acc.keys(), key=float):
+                win = _readout_bucket(window_f_acc, f_key)
+                _append_jsonl(
+                    cfg.metrics_jsonl_path,
+                    {
+                        "episode": int(episode + 1),
+                        "seed": int(cfg.seed),
+                        "condition": str(cfg.condition_name),
+                        "scope": "f_value",
+                        "key": str(f_key),
+                        "window": "window",
+                        "n_rounds": int(win["n_rounds"]),
+                        "coop_rate": float(win["coop_rate"]),
+                        "avg_reward": float(win["avg_reward"]),
+                    },
+                )
+            for f_key in sorted(cumulative_f_acc.keys(), key=float):
+                cum = _readout_bucket(cumulative_f_acc, f_key)
+                _append_jsonl(
+                    cfg.metrics_jsonl_path,
+                    {
+                        "episode": int(episode + 1),
+                        "seed": int(cfg.seed),
+                        "condition": str(cfg.condition_name),
+                        "scope": "f_value",
+                        "key": str(f_key),
+                        "window": "cumulative",
+                        "n_rounds": int(cum["n_rounds"]),
+                        "coop_rate": float(cum["coop_rate"]),
+                        "avg_reward": float(cum["avg_reward"]),
+                    },
+                )
+
+            print(
+                f"[regime @ episode {episode + 1:04d}] " + " ".join(summary_chunks)
+            )
+            window_regime_acc = {
+                "competitive": _bucket(),
+                "mixed": _bucket(),
+                "cooperative": _bucket(),
+            }
+            window_f_acc = {}
 
         # Early stopping on avg_reward if enabled.
         if cfg.early_stop_patience > 0:
@@ -594,6 +747,8 @@ def parse_args():
     parser.add_argument("--use_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="dsc-epgg")
     parser.add_argument("--wandb_mode", type=str, default="offline")
+    parser.add_argument("--regime_log_interval", type=int, default=500)
+    parser.add_argument("--metrics_jsonl_path", type=str, default="")
     return parser.parse_args()
 
 
@@ -649,6 +804,8 @@ def args_to_config(args) -> TrainConfig:
         use_wandb=bool(args.use_wandb),
         wandb_project=args.wandb_project,
         wandb_mode=args.wandb_mode,
+        regime_log_interval=args.regime_log_interval,
+        metrics_jsonl_path=args.metrics_jsonl_path,
     )
     if len(cfg.sigmas) != cfg.n_agents:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
@@ -658,6 +815,8 @@ def args_to_config(args) -> TrainConfig:
         raise ValueError("n_senders must be in [0, n_agents]")
     if cfg.comm_enabled and cfg.n_senders <= 0:
         raise ValueError("comm_enabled requires n_senders > 0")
+    if cfg.regime_log_interval <= 0:
+        raise ValueError("regime_log_interval must be > 0")
     return cfg
 
 

@@ -12,11 +12,12 @@ from typing import Dict, List
 
 
 @dataclass
-class GridJob:
-    condition: str
+class FixedFJob:
+    f_value: float
     seed: int
     save_path: str
     log_path: str
+    metrics_jsonl_path: str
     cmd: List[str]
 
 
@@ -24,35 +25,16 @@ def _repo_root() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
-def _condition_config(condition: str, n_agents: int) -> Dict:
-    if condition == "cond6":
-        return {
-            "sigmas": [0.0] * n_agents,
-            "epsilon_tremble": 0.0,
-            "comm_enabled": False,
-            "vocab_size": 2,
-        }
-    if condition == "cond2":
-        return {
-            "sigmas": [0.5] * n_agents,
-            "epsilon_tremble": 0.05,
-            "comm_enabled": False,
-            "vocab_size": 2,
-        }
-    if condition == "cond1":
-        return {
-            "sigmas": [0.5] * n_agents,
-            "epsilon_tremble": 0.05,
-            "comm_enabled": True,
-            "vocab_size": 2,
-        }
-    raise ValueError(f"unknown condition: {condition}")
+def _f_slug(f_value: float) -> str:
+    return str(float(f_value)).replace("-", "m").replace(".", "p")
 
 
-def _build_job(args, condition: str, seed: int) -> GridJob:
-    cfg = _condition_config(condition, n_agents=args.n_agents)
-    save_path = os.path.join(args.save_dir, f"{condition}_seed{seed}.pt")
-    log_path = os.path.join(args.log_dir, f"{condition}_seed{seed}.log")
+def _build_job(args, f_value: float, seed: int) -> FixedFJob:
+    slug = _f_slug(f_value)
+    save_path = os.path.join(args.save_dir, f"fixedf_{slug}_seed{seed}.pt")
+    log_path = os.path.join(args.log_dir, f"fixedf_{slug}_seed{seed}.log")
+    metrics_jsonl_path = os.path.join(args.metrics_dir, f"fixedf_{slug}_seed{seed}.jsonl")
+    condition_name = f"fixedf_{slug}"
 
     cmd = [
         sys.executable,
@@ -64,29 +46,44 @@ def _build_job(args, condition: str, seed: int) -> GridJob:
         str(args.T),
         "--n_agents",
         str(args.n_agents),
+        "--F",
+        str(float(f_value)),
+        "--rho",
+        str(args.rho),
         "--sigmas",
-        *[str(x) for x in cfg["sigmas"]],
+        *[str(v) for v in args.sigmas],
         "--epsilon_tremble",
-        str(cfg["epsilon_tremble"]),
+        str(args.epsilon_tremble),
+        "--gamma",
+        str(args.gamma),
+        "--lam",
+        str(args.lam),
         "--seed",
         str(seed),
         "--save_path",
         save_path,
+        "--condition_name",
+        condition_name,
         "--log_interval",
         str(args.log_interval),
+        "--regime_log_interval",
+        str(args.regime_log_interval),
+        "--metrics_jsonl_path",
+        metrics_jsonl_path,
         "--lr_schedule",
         args.lr_schedule,
         "--min_lr",
         str(args.min_lr),
     ]
-    if cfg["comm_enabled"]:
-        cmd.extend(["--comm_enabled", "--vocab_size", str(cfg["vocab_size"])])
+    if args.comm_enabled:
+        cmd.extend(["--comm_enabled", "--vocab_size", str(args.vocab_size)])
 
-    return GridJob(
-        condition=condition,
+    return FixedFJob(
+        f_value=float(f_value),
         seed=int(seed),
         save_path=save_path,
         log_path=log_path,
+        metrics_jsonl_path=metrics_jsonl_path,
         cmd=cmd,
     )
 
@@ -105,13 +102,14 @@ def _extract_last_metrics(log_path: str) -> Dict:
         return {}
 
 
-def _run_job(job: GridJob, cwd: str) -> Dict:
+def _run_job(job: FixedFJob, cwd: str) -> Dict:
     start = time.time()
     os.makedirs(os.path.dirname(job.log_path), exist_ok=True)
     os.makedirs(os.path.dirname(job.save_path), exist_ok=True)
+    os.makedirs(os.path.dirname(job.metrics_jsonl_path), exist_ok=True)
 
     with open(job.log_path, "w", encoding="utf-8") as logf:
-        logf.write(f"# condition={job.condition} seed={job.seed}\n")
+        logf.write(f"# fixed_f={job.f_value} seed={job.seed}\n")
         logf.write("# cmd: " + " ".join(job.cmd) + "\n\n")
         logf.flush()
         proc = subprocess.run(
@@ -125,29 +123,39 @@ def _run_job(job: GridJob, cwd: str) -> Dict:
     duration_sec = time.time() - start
     last = _extract_last_metrics(job.log_path)
     return {
-        "condition": job.condition,
-        "seed": job.seed,
+        "f_value": float(job.f_value),
+        "seed": int(job.seed),
         "returncode": int(proc.returncode),
         "duration_sec": float(duration_sec),
         "save_path": job.save_path,
         "log_path": job.log_path,
+        "metrics_jsonl_path": job.metrics_jsonl_path,
         "last_metrics": last,
     }
 
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--conditions", nargs="*", default=["cond6", "cond2", "cond1"])
-    p.add_argument("--seeds", nargs="*", type=int, default=[101, 202, 303, 404, 505])
-    p.add_argument("--n_episodes", type=int, default=2000)
+    p.add_argument("--f_values", nargs="*", type=float, default=[0.5, 1.5, 2.5, 3.5])
+    p.add_argument("--seeds", nargs="*", type=int, default=[101])
+    p.add_argument("--n_episodes", type=int, default=50000)
     p.add_argument("--T", type=int, default=100)
     p.add_argument("--n_agents", type=int, default=4)
-    p.add_argument("--max_workers", type=int, default=3)
-    p.add_argument("--log_interval", type=int, default=100)
+    p.add_argument("--rho", type=float, default=0.0)
+    p.add_argument("--sigmas", nargs="*", type=float, default=[0.0, 0.0, 0.0, 0.0])
+    p.add_argument("--epsilon_tremble", type=float, default=0.0)
+    p.add_argument("--comm_enabled", action="store_true")
+    p.add_argument("--vocab_size", type=int, default=2)
+    p.add_argument("--gamma", type=float, default=0.99)
+    p.add_argument("--lam", type=float, default=0.95)
+    p.add_argument("--log_interval", type=int, default=500)
+    p.add_argument("--regime_log_interval", type=int, default=500)
     p.add_argument("--lr_schedule", type=str, choices=["none", "linear"], default="linear")
     p.add_argument("--min_lr", type=float, default=1e-5)
-    p.add_argument("--save_dir", type=str, default="outputs/train/grid")
-    p.add_argument("--log_dir", type=str, default="outputs/train/grid/logs")
+    p.add_argument("--max_workers", type=int, default=2)
+    p.add_argument("--save_dir", type=str, default="outputs/train/fixed_f_grid")
+    p.add_argument("--log_dir", type=str, default="outputs/train/fixed_f_grid/logs")
+    p.add_argument("--metrics_dir", type=str, default="outputs/train/fixed_f_grid/metrics")
     p.add_argument("--skip_existing", action="store_true")
     p.add_argument("--dry_run", action="store_true")
     return p.parse_args()
@@ -156,28 +164,32 @@ def parse_args():
 def main():
     args = parse_args()
     root = _repo_root()
+    if len(args.sigmas) != int(args.n_agents):
+        raise ValueError("len(sigmas) must equal n_agents")
+
     os.makedirs(os.path.join(root, args.save_dir), exist_ok=True)
     os.makedirs(os.path.join(root, args.log_dir), exist_ok=True)
+    os.makedirs(os.path.join(root, args.metrics_dir), exist_ok=True)
 
-    jobs: List[GridJob] = []
-    for condition in args.conditions:
+    jobs: List[FixedFJob] = []
+    for f_value in args.f_values:
         for seed in args.seeds:
-            job = _build_job(args, condition, seed)
+            job = _build_job(args=args, f_value=float(f_value), seed=int(seed))
             if args.skip_existing and os.path.exists(os.path.join(root, job.save_path)):
-                print(f"[skip-existing] {job.condition} seed={job.seed} -> {job.save_path}")
+                print(f"[skip-existing] f={job.f_value} seed={job.seed} -> {job.save_path}")
                 continue
             jobs.append(job)
 
     print(
-        f"[grid] jobs={len(jobs)} conditions={args.conditions} "
-        f"seeds={args.seeds} episodes={args.n_episodes} workers={args.max_workers}"
+        f"[fixed-f] jobs={len(jobs)} f_values={args.f_values} seeds={args.seeds} "
+        f"episodes={args.n_episodes} workers={args.max_workers}"
     )
     if args.dry_run:
         for job in jobs:
             print(" ".join(job.cmd))
         return
     if len(jobs) == 0:
-        print("[grid] nothing to run.")
+        print("[fixed-f] nothing to run.")
         return
 
     start = time.time()
@@ -190,43 +202,43 @@ def main():
                 out = fut.result()
             except Exception as exc:
                 out = {
-                    "condition": job.condition,
-                    "seed": job.seed,
+                    "f_value": float(job.f_value),
+                    "seed": int(job.seed),
                     "returncode": -1,
                     "duration_sec": None,
                     "save_path": job.save_path,
                     "log_path": job.log_path,
+                    "metrics_jsonl_path": job.metrics_jsonl_path,
                     "error": str(exc),
                 }
             results.append(out)
-            rc = out.get("returncode", -1)
+            rc = int(out.get("returncode", -1))
             dur = out.get("duration_sec")
             status = "ok" if rc == 0 else "fail"
             if dur is None:
-                print(f"[done] {status} {job.condition} seed={job.seed} rc={rc}")
+                print(f"[done] {status} f={job.f_value} seed={job.seed} rc={rc}")
             else:
                 print(
-                    f"[done] {status} {job.condition} seed={job.seed} rc={rc} "
+                    f"[done] {status} f={job.f_value} seed={job.seed} rc={rc} "
                     f"duration={dur:.1f}s"
                 )
 
     elapsed = time.time() - start
     ok = sum(1 for r in results if int(r.get("returncode", -1)) == 0)
     fail = len(results) - ok
-
     summary = {
         "n_jobs": len(results),
         "ok": ok,
         "fail": fail,
         "elapsed_sec": float(elapsed),
-        "results": sorted(results, key=lambda x: (x["condition"], x["seed"])),
+        "results": sorted(results, key=lambda x: (x["f_value"], x["seed"])),
     }
-    summary_path = os.path.join(root, args.save_dir, "grid_summary.json")
+    summary_path = os.path.join(root, args.save_dir, "fixed_f_summary.json")
     with open(summary_path, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
 
     print(
-        f"[grid] complete ok={ok} fail={fail} elapsed={elapsed:.1f}s "
+        f"[fixed-f] complete ok={ok} fail={fail} elapsed={elapsed:.1f}s "
         f"summary={summary_path}"
     )
 
