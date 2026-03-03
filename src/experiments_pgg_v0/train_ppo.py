@@ -69,6 +69,10 @@ class TrainConfig:
     seed: int = 42
     log_interval: int = 10
     save_path: str = "outputs/ppo_agents.pt"
+    lr_schedule: str = "none"  # one of: none, linear
+    min_lr: float = 1e-5
+    early_stop_patience: int = 0
+    early_stop_min_delta: float = 1e-6
     enable_comm_fallback: bool = True
     max_comm_debug_cycles: int = 2
     log_sessions: bool = False
@@ -77,6 +81,9 @@ class TrainConfig:
     consolidate_sessions: bool = False
     run_regime_audit: bool = False
     audit_sessions: int = 100
+    use_wandb: bool = False
+    wandb_project: str = "dsc-epgg"
+    wandb_mode: str = "offline"
 
 
 def minimal_test_config(**overrides):
@@ -117,6 +124,12 @@ def _safe_is_finite(metrics: Dict[str, float]) -> bool:
         if not math.isfinite(float(val)):
             return False
     return True
+
+
+def _set_agents_lr(agents: Dict[str, PPOAgentV2], lr_value: float):
+    for agent in agents.values():
+        for param_group in agent.optimizer.param_groups:
+            param_group["lr"] = float(lr_value)
 
 
 def _build_env(cfg: TrainConfig):
@@ -181,6 +194,8 @@ def _single_run(cfg: TrainConfig):
         default_endowment=cfg.endowment,
     )
     agents = _build_agents(cfg, obs_dim=wrapper.obs_dim, sender_ids=sender_ids)
+    if cfg.lr_schedule == "linear":
+        _set_agents_lr(agents, cfg.lr)
     ppo = PPOTrainer(
         agents=agents,
         clip_ratio=cfg.clip_ratio,
@@ -201,9 +216,30 @@ def _single_run(cfg: TrainConfig):
         if cfg.log_sessions
         else None
     )
+    wandb_run = None
+    if cfg.use_wandb:
+        try:
+            import wandb  # local import to keep dependency optional at runtime
+
+            wandb_run = wandb.init(
+                project=cfg.wandb_project,
+                mode=cfg.wandb_mode,
+                config=cfg.__dict__,
+            )
+        except Exception as exc:
+            print(f"[wandb] disabled due to init error: {exc}")
+            wandb_run = None
 
     metrics_over_time = []
+    best_metric = -float("inf")
+    stale_epochs = 0
     for episode in range(cfg.n_episodes):
+        if cfg.lr_schedule == "linear":
+            progress = float(episode) / float(max(1, cfg.n_episodes - 1))
+            episode_lr = cfg.lr - (cfg.lr - cfg.min_lr) * progress
+            episode_lr = max(float(cfg.min_lr), float(episode_lr))
+            _set_agents_lr(agents, episode_lr)
+
         buffer = TrajectoryBuffer(
             agent_ids=agent_ids,
             T=cfg.T,
@@ -264,10 +300,17 @@ def _single_run(cfg: TrainConfig):
                     ).unsqueeze(0)
                     probs_with = agents[agent_id].action_distribution(obs_t).squeeze(0)
                     obs_no_msg = obs_t.clone()
-                    obs_no_msg[:, 5:] = 0.0
+                    msg_start = wrapper.message_start_idx
+                    obs_no_msg[:, msg_start:] = 0.0
                     probs_without = agents[agent_id].action_distribution(obs_no_msg).squeeze(0)
+                    eps = 1e-8
+                    # KL(pi(a|with_msg) || pi(a|without_msg)): larger means messages
+                    # shift action predictions more strongly.
+                    kl = torch.sum(
+                        probs_with * (torch.log(probs_with + eps) - torch.log(probs_without + eps))
+                    )
                     listening_bonus[agent_id] = -float(
-                        torch.sum(torch.abs(probs_without - probs_with)).detach().cpu().item()
+                        kl.detach().cpu().item()
                     )
 
             raw_obs_next, rewards, done, infos = env.step(intended_actions)
@@ -340,6 +383,8 @@ def _single_run(cfg: TrainConfig):
             **train_metrics,
         }
         metrics_over_time.append(episode_metrics)
+        if wandb_run is not None:
+            wandb_run.log(episode_metrics, step=episode)
 
         if (episode + 1) % max(1, cfg.log_interval) == 0:
             print(
@@ -348,7 +393,24 @@ def _single_run(cfg: TrainConfig):
                 f"loss={train_metrics['loss_total']:.4f}"
             )
 
+        # Early stopping on avg_reward if enabled.
+        if cfg.early_stop_patience > 0:
+            current = avg_reward
+            if current > best_metric + cfg.early_stop_min_delta:
+                best_metric = current
+                stale_epochs = 0
+            else:
+                stale_epochs += 1
+                if stale_epochs >= cfg.early_stop_patience:
+                    print(
+                        f"[early-stop] stopping at episode {episode + 1} "
+                        f"(best_avg_reward={best_metric:.4f})"
+                    )
+                    break
+
     _save_agents(cfg.save_path, agents, cfg)
+    if wandb_run is not None:
+        wandb_run.finish()
 
     if session_logger is not None and cfg.consolidate_sessions:
         consolidated = session_logger.consolidate(delete_parts=False)
@@ -423,6 +485,10 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--save_path", type=str, default="outputs/ppo_agents.pt")
+    parser.add_argument("--lr_schedule", type=str, choices=["none", "linear"], default="none")
+    parser.add_argument("--min_lr", type=float, default=1e-5)
+    parser.add_argument("--early_stop_patience", type=int, default=0)
+    parser.add_argument("--early_stop_min_delta", type=float, default=1e-6)
     parser.add_argument("--disable_comm_fallback", action="store_true")
     parser.add_argument("--max_comm_debug_cycles", type=int, default=2)
     parser.add_argument("--log_sessions", action="store_true")
@@ -431,6 +497,9 @@ def parse_args():
     parser.add_argument("--consolidate_sessions", action="store_true")
     parser.add_argument("--run_regime_audit", action="store_true")
     parser.add_argument("--audit_sessions", type=int, default=100)
+    parser.add_argument("--use_wandb", action="store_true")
+    parser.add_argument("--wandb_project", type=str, default="dsc-epgg")
+    parser.add_argument("--wandb_mode", type=str, default="offline")
     return parser.parse_args()
 
 
@@ -463,6 +532,10 @@ def args_to_config(args) -> TrainConfig:
         seed=args.seed,
         log_interval=args.log_interval,
         save_path=args.save_path,
+        lr_schedule=args.lr_schedule,
+        min_lr=args.min_lr,
+        early_stop_patience=args.early_stop_patience,
+        early_stop_min_delta=args.early_stop_min_delta,
         enable_comm_fallback=not bool(args.disable_comm_fallback),
         max_comm_debug_cycles=args.max_comm_debug_cycles,
         log_sessions=bool(args.log_sessions),
@@ -471,6 +544,9 @@ def args_to_config(args) -> TrainConfig:
         consolidate_sessions=bool(args.consolidate_sessions),
         run_regime_audit=bool(args.run_regime_audit),
         audit_sessions=args.audit_sessions,
+        use_wandb=bool(args.use_wandb),
+        wandb_project=args.wandb_project,
+        wandb_mode=args.wandb_mode,
     )
     if len(cfg.sigmas) != cfg.n_agents:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")

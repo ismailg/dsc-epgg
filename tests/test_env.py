@@ -99,6 +99,33 @@ def test_rewards_match_payoff_formula():
         assert abs(float(rewards[agent]) - 10.0) < 1e-6
 
 
+def test_rewards_match_payoff_formula_mixed_actions():
+    env = make_env(
+        num_game_iterations=1,
+        epsilon_tremble=0.0,
+        uncertainties=[0, 0, 0, 0],
+        F=[2.5],
+        mult_fact=[2.5],
+    )
+    env.reset()
+    env._set_current_multiplier(2.5)
+    actions = {
+        "agent_0": 1,  # cooperate
+        "agent_1": 1,  # cooperate
+        "agent_2": 0,  # defect
+        "agent_3": 0,  # defect
+    }
+    _, rewards, done, _ = env.step(actions)
+    assert done is True
+    # common pot = 8, pot/N * f = 8/4*2.5 = 5.0
+    # cooperators: 5.0 + (4-4) = 5.0
+    # defectors:   5.0 + (4-0) = 9.0
+    assert abs(float(rewards["agent_0"]) - 5.0) < 1e-6
+    assert abs(float(rewards["agent_1"]) - 5.0) < 1e-6
+    assert abs(float(rewards["agent_2"]) - 9.0) < 1e-6
+    assert abs(float(rewards["agent_3"]) - 9.0) < 1e-6
+
+
 def test_no_observation_clamping():
     env = make_env(num_game_iterations=600, uncertainties=[5.0, 5.0, 5.0, 5.0], F=[0.5, 1.5, 2.5])
     obs = env.reset()
@@ -120,4 +147,3 @@ def test_observation_space_is_box():
         space = env.observation_space(agent)
         assert isinstance(space, Box)
         assert tuple(space.shape) == (2,)
-

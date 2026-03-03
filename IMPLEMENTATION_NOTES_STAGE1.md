@@ -48,5 +48,6 @@ Repo: `ismailg/dsc-epgg` (local path `/Users/mbp17/POSTDOC/NPS26/dsc-epgg`)
 - Observation clamping removed from `observe()`.
 - Observation space changed to continuous `Box(shape=(2,), dtype=float32)`.
 - Wrapper implemented with lagged features, EWMA, message marginals, and dropout.
+- Added mixed-action payoff regression test (2 cooperate / 2 defect) to verify
+  both cooperator and defector reward formulas in addition to all-cooperate case.
 - Gate 1 and expanded tests pass.
-

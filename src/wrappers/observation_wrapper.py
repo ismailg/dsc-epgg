@@ -148,3 +148,7 @@ class ObservationWrapper:
             base += len(self.sender_ids) * self.vocab_size
         return base
 
+    @property
+    def message_start_idx(self) -> int:
+        # Base Set-A fields before message one-hot blocks.
+        return 5

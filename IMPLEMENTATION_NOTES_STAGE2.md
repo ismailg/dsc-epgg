@@ -24,6 +24,14 @@
   - Implements time-boxed comm fallback:
     - Up to 2 debug attempts by default.
     - Falls back to no-comm PPO if repeated non-finite metrics occur.
+  - Hardening updates:
+    - Listening signal uses KL divergence between action distributions
+      with vs without message features (instead of L1).
+    - Message-feature start index comes from wrapper (`message_start_idx`),
+      removing hard-coded offsets in trainer.
+    - Optional linear LR schedule (`--lr_schedule linear --min_lr ...`).
+    - Optional early stopping on average reward (`--early_stop_patience`).
+    - Optional W&B tracking hooks (`--use_wandb`, default off).
 
 ## Objective details
 
