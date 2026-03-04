@@ -295,19 +295,20 @@ def _condition_summary(rows: List[Dict]) -> List[Dict]:
     for row in rows:
         if row["scope"] != "regime":
             continue
-        key = (row["condition"], row["key"])
+        key = (row["condition"], row["key"], row.get("eval_policy", "sample"))
         n = int(row["n_rounds"])
         grouped[key]["n_rounds"] += n
         grouped[key]["coop_weighted"] += float(row["coop_rate"]) * n
         grouped[key]["reward_weighted"] += float(row["avg_reward"]) * n
 
     out = []
-    for (condition, regime), acc in sorted(grouped.items()):
+    for (condition, regime, eval_policy), acc in sorted(grouped.items()):
         n = max(1, int(acc["n_rounds"]))
         out.append(
             {
                 "condition": condition,
                 "regime": regime,
+                "eval_policy": eval_policy,
                 "n_rounds": int(acc["n_rounds"]),
                 "coop_rate": float(acc["coop_weighted"] / n),
                 "avg_reward": float(acc["reward_weighted"] / n),
@@ -354,7 +355,8 @@ def main():
     os.makedirs(os.path.dirname(args.out_condition_csv), exist_ok=True)
     with open(args.out_condition_csv, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
-            f, fieldnames=["condition", "regime", "n_rounds", "coop_rate", "avg_reward"]
+            f,
+            fieldnames=["condition", "regime", "eval_policy", "n_rounds", "coop_rate", "avg_reward"],
         )
         writer.writeheader()
         for row in cond_rows:
@@ -365,7 +367,7 @@ def main():
     for row in cond_rows:
         print(
             "[summary] "
-            f"{row['condition']} {row['regime']} "
+            f"{row['condition']} {row['regime']} [{row['eval_policy']}] "
             f"coop={row['coop_rate']:.3f} reward={row['avg_reward']:.3f} "
             f"n_rounds={row['n_rounds']}"
         )
