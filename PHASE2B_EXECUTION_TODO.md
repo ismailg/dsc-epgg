@@ -16,7 +16,7 @@ Last updated: 2026-03-04 (local)
   - [x] Save at interval episodes and at final episode
 
 ## 2) Validation after code changes
-- [ ] Run tests: `python -m pytest tests/ -v` (currently blocked in this shell by torch import abort)
+- [x] Run tests: `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python3 -m pytest tests/ -v` (28 passed)
 - [x] Run quick smoke eval of `--greedy` mode on an existing checkpoint
 - [x] Confirm comm JSONL records are emitted for a short comm-enabled run
 
