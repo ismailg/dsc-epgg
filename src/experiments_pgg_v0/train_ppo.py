@@ -91,6 +91,7 @@ class TrainConfig:
     wandb_mode: str = "offline"
     regime_log_interval: int = 500
     metrics_jsonl_path: str = ""
+    checkpoint_interval: int = 0
 
 
 def minimal_test_config(**overrides):
@@ -172,6 +173,26 @@ def _append_jsonl(path: str, row: Dict):
         os.makedirs(parent, exist_ok=True)
     with open(path, "a", encoding="utf-8") as f:
         f.write(json.dumps(row) + "\n")
+
+
+def _mutual_information_from_counts(counts: np.ndarray) -> float:
+    arr = np.asarray(counts, dtype=np.float64)
+    total = float(np.sum(arr))
+    if total <= 0.0:
+        return 0.0
+    p_xy = arr / total
+    p_x = np.sum(p_xy, axis=1, keepdims=True)
+    p_y = np.sum(p_xy, axis=0, keepdims=True)
+    mask = p_xy > 0.0
+    denom = np.maximum(p_x * p_y, 1e-12)
+    return float(np.sum(p_xy[mask] * np.log2(p_xy[mask] / denom[mask])))
+
+
+def _checkpoint_with_episode(base_path: str, episode_num: int) -> str:
+    root, ext = os.path.splitext(base_path)
+    if ext == "":
+        ext = ".pt"
+    return f"{root}_ep{int(episode_num)}{ext}"
 
 
 def _set_agents_lr(agents: Dict[str, PPOAgentV2], lr_value: float):
@@ -342,6 +363,20 @@ def _single_run(cfg: TrainConfig):
     window_regime_acc = {label: _bucket() for label in ("competitive", "mixed", "cooperative")}
     cumulative_f_acc: Dict[str, Dict[str, float]] = {}
     window_f_acc: Dict[str, Dict[str, float]] = {}
+    sender_agent_idx = {sender_id: agent_ids.index(sender_id) for sender_id in sender_ids}
+    f_keys_sorted = sorted({f"{float(v):.3f}" for v in cfg.F}, key=float)
+    f_key_to_idx = {key: idx for idx, key in enumerate(f_keys_sorted)}
+
+    def _new_comm_window_counts():
+        return {
+            sender_id: {
+                "msg_f": np.zeros((cfg.vocab_size, len(f_keys_sorted)), dtype=np.float64),
+                "msg_action": np.zeros((cfg.vocab_size, 2), dtype=np.float64),
+            }
+            for sender_id in sender_ids
+        }
+
+    window_comm_counts = _new_comm_window_counts() if (cfg.comm_enabled and len(sender_ids) > 0) else {}
     best_metric = -float("inf")
     stale_epochs = 0
     for episode in range(cfg.n_episodes):
@@ -534,6 +569,21 @@ def _single_run(cfg: TrainConfig):
                 f_key = f"{f_val:.3f}"
                 _update_bucket(cumulative_f_acc, f_key, coop_t, rew_t)
                 _update_bucket(window_f_acc, f_key, coop_t, rew_t)
+
+                if cfg.comm_enabled and len(sender_ids) > 0 and buffer.message_actions is not None:
+                    f_idx = f_key_to_idx.get(f_key)
+                    if f_idx is None:
+                        continue
+                    for sender_id in sender_ids:
+                        a_idx = sender_agent_idx[sender_id]
+                        msg = int(buffer.message_actions[t, a_idx])
+                        act = int(buffer.executed_actions[t, a_idx])
+                        if msg < 0 or msg >= cfg.vocab_size:
+                            continue
+                        if act < 0 or act > 1:
+                            continue
+                        window_comm_counts[sender_id]["msg_f"][msg, f_idx] += 1.0
+                        window_comm_counts[sender_id]["msg_action"][msg, act] += 1.0
         episode_metrics = {
             "episode": episode,
             "steps": buffer.t,
@@ -627,6 +677,83 @@ def _single_run(cfg: TrainConfig):
                     },
                 )
 
+            if cfg.comm_enabled and len(sender_ids) > 0:
+                all_msg_f = np.zeros((cfg.vocab_size, len(f_keys_sorted)), dtype=np.float64)
+                all_msg_action = np.zeros((cfg.vocab_size, 2), dtype=np.float64)
+                for sender_id in sender_ids:
+                    msg_f_counts = window_comm_counts[sender_id]["msg_f"]
+                    msg_action_counts = window_comm_counts[sender_id]["msg_action"]
+                    all_msg_f += msg_f_counts
+                    all_msg_action += msg_action_counts
+
+                    mi_msg_f = _mutual_information_from_counts(msg_f_counts)
+                    mi_msg_action = _mutual_information_from_counts(msg_action_counts)
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(episode + 1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "comm",
+                            "key": sender_id,
+                            "window": "window",
+                            "metric": "mi_message_f",
+                            "mi": float(mi_msg_f),
+                            "mi_unit": "bits",
+                            "n_pairs": int(np.sum(msg_f_counts)),
+                        },
+                    )
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(episode + 1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "comm",
+                            "key": sender_id,
+                            "window": "window",
+                            "metric": "mi_message_action",
+                            "mi": float(mi_msg_action),
+                            "mi_unit": "bits",
+                            "n_pairs": int(np.sum(msg_action_counts)),
+                        },
+                    )
+
+                mi_all_msg_f = _mutual_information_from_counts(all_msg_f)
+                mi_all_msg_action = _mutual_information_from_counts(all_msg_action)
+                summary_chunks.append(f"mi(m;f)={mi_all_msg_f:.3f}")
+                summary_chunks.append(f"mi(m;a)={mi_all_msg_action:.3f}")
+                _append_jsonl(
+                    cfg.metrics_jsonl_path,
+                    {
+                        "episode": int(episode + 1),
+                        "seed": int(cfg.seed),
+                        "condition": str(cfg.condition_name),
+                        "scope": "comm",
+                        "key": "all_senders",
+                        "window": "window",
+                        "metric": "mi_message_f",
+                        "mi": float(mi_all_msg_f),
+                        "mi_unit": "bits",
+                        "n_pairs": int(np.sum(all_msg_f)),
+                    },
+                )
+                _append_jsonl(
+                    cfg.metrics_jsonl_path,
+                    {
+                        "episode": int(episode + 1),
+                        "seed": int(cfg.seed),
+                        "condition": str(cfg.condition_name),
+                        "scope": "comm",
+                        "key": "all_senders",
+                        "window": "window",
+                        "metric": "mi_message_action",
+                        "mi": float(mi_all_msg_action),
+                        "mi_unit": "bits",
+                        "n_pairs": int(np.sum(all_msg_action)),
+                    },
+                )
+
             print(
                 f"[regime @ episode {episode + 1:04d}] " + " ".join(summary_chunks)
             )
@@ -636,6 +763,19 @@ def _single_run(cfg: TrainConfig):
                 "cooperative": _bucket(),
             }
             window_f_acc = {}
+            if cfg.comm_enabled and len(sender_ids) > 0:
+                window_comm_counts = _new_comm_window_counts()
+
+        if (
+            cfg.checkpoint_interval > 0
+            and (episode + 1) % int(cfg.checkpoint_interval) == 0
+            and (episode + 1) < cfg.n_episodes
+        ):
+            ckpt_path = _checkpoint_with_episode(cfg.save_path, episode + 1)
+            ckpt_cfg = TrainConfig(**cfg.__dict__)
+            ckpt_cfg.save_path = ckpt_path
+            _save_agents(ckpt_path, agents, ckpt_cfg)
+            print(f"[checkpoint] saved intermediate checkpoint: {ckpt_path}")
 
         # Early stopping on avg_reward if enabled.
         if cfg.early_stop_patience > 0:
@@ -749,6 +889,7 @@ def parse_args():
     parser.add_argument("--wandb_mode", type=str, default="offline")
     parser.add_argument("--regime_log_interval", type=int, default=500)
     parser.add_argument("--metrics_jsonl_path", type=str, default="")
+    parser.add_argument("--checkpoint_interval", type=int, default=0)
     return parser.parse_args()
 
 
@@ -806,6 +947,7 @@ def args_to_config(args) -> TrainConfig:
         wandb_mode=args.wandb_mode,
         regime_log_interval=args.regime_log_interval,
         metrics_jsonl_path=args.metrics_jsonl_path,
+        checkpoint_interval=args.checkpoint_interval,
     )
     if len(cfg.sigmas) != cfg.n_agents:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
@@ -817,6 +959,8 @@ def args_to_config(args) -> TrainConfig:
         raise ValueError("comm_enabled requires n_senders > 0")
     if cfg.regime_log_interval <= 0:
         raise ValueError("regime_log_interval must be > 0")
+    if cfg.checkpoint_interval < 0:
+        raise ValueError("checkpoint_interval must be >= 0")
     return cfg
 
 

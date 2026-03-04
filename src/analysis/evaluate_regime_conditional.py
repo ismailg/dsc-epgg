@@ -56,7 +56,7 @@ def _regime_label(f_val: float, n_agents: int) -> str:
     return "cooperative"
 
 
-def _env_cfg_from_train_cfg(cfg: Dict) -> Dict:
+def _env_cfg_from_train_cfg(cfg: Dict, greedy: bool = False) -> Dict:
     return dict(
         n_agents=int(cfg["n_agents"]),
         num_game_iterations=int(cfg["T"]),
@@ -65,12 +65,13 @@ def _env_cfg_from_train_cfg(cfg: Dict) -> Dict:
         uncertainties=[float(v) for v in cfg["sigmas"]],
         fraction=False,
         rho=float(cfg.get("rho", 0.05)),
-        epsilon_tremble=float(cfg.get("epsilon_tremble", 0.05)),
+        # Greedy eval measures policy preference, so disable tremble noise.
+        epsilon_tremble=0.0 if greedy else float(cfg.get("epsilon_tremble", 0.05)),
         endowment=float(cfg.get("endowment", 4.0)),
     )
 
 
-def _build_eval_objects(payload: Dict):
+def _build_eval_objects(payload: Dict, greedy: bool = False):
     cfg = payload["config"]
     n_agents = int(cfg["n_agents"])
     agent_ids = [f"agent_{i}" for i in range(n_agents)]
@@ -87,7 +88,8 @@ def _build_eval_objects(payload: Dict):
         n_senders=n_senders,
         sender_ids=sender_ids,
         vocab_size=vocab_size,
-        msg_dropout=float(cfg.get("msg_dropout", 0.1)),
+        # Keep greedy mode deterministic by disabling message dropout.
+        msg_dropout=0.0 if greedy else float(cfg.get("msg_dropout", 0.1)),
         default_endowment=float(cfg.get("endowment", 4.0)),
     )
     value_time_feature = bool(cfg.get("value_time_feature", False))
@@ -116,7 +118,7 @@ def _build_eval_objects(payload: Dict):
             agent.message_actor.eval()
         agents[agent_id] = agent
 
-    env = pgg_parallel_v0.parallel_env(_env_cfg_from_train_cfg(cfg))
+    env = pgg_parallel_v0.parallel_env(_env_cfg_from_train_cfg(cfg, greedy=greedy))
     return cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature
 
 
@@ -124,9 +126,12 @@ def _eval_checkpoint(
     checkpoint_path: str,
     n_eval_episodes: int,
     eval_seed: int,
+    greedy: bool = False,
 ) -> List[Dict]:
     payload = torch.load(checkpoint_path, map_location="cpu")
-    cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature = _build_eval_objects(payload)
+    cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature = _build_eval_objects(
+        payload, greedy=greedy
+    )
     _seed_everything(eval_seed)
 
     n_agents = int(cfg["n_agents"])
@@ -154,7 +159,18 @@ def _eval_checkpoint(
                 if comm_enabled and len(sender_ids) > 0:
                     proposed = {}
                     for sender_id in sender_ids:
-                        msg, _lp, _ent, _probs = agents[sender_id].sample_message(aug_obs[sender_id])
+                        if greedy:
+                            obs_t = torch.tensor(
+                                aug_obs[sender_id],
+                                dtype=torch.float32,
+                                device=agents[sender_id].action_actor.net[0].weight.device,
+                            )
+                            logits = agents[sender_id].message_actor(obs_t)
+                            msg = int(torch.argmax(logits).item())
+                        else:
+                            msg, _lp, _ent, _probs = agents[sender_id].sample_message(
+                                aug_obs[sender_id]
+                            )
                         proposed[sender_id] = int(msg)
                     dropped = wrapper.apply_msg_dropout(proposed)
                     for sender_id, msg in proposed.items():
@@ -175,9 +191,18 @@ def _eval_checkpoint(
                         if value_time_feature
                         else aug_obs[agent_id]
                     )
-                    action, _lp, _value, _ent, _probs = agents[agent_id].sample_action(
-                        aug_obs[agent_id], value_obs=value_obs
-                    )
+                    if greedy:
+                        obs_t = torch.tensor(
+                            aug_obs[agent_id],
+                            dtype=torch.float32,
+                            device=agents[agent_id].action_actor.net[0].weight.device,
+                        )
+                        logits = agents[agent_id].action_actor(obs_t)
+                        action = int(torch.argmax(logits).item())
+                    else:
+                        action, _lp, _value, _ent, _probs = agents[agent_id].sample_action(
+                            aug_obs[agent_id], value_obs=value_obs
+                        )
                     intended_actions[agent_id] = int(action)
 
                 raw_next, rewards, done, infos = env.step(intended_actions)
@@ -212,6 +237,7 @@ def _eval_checkpoint(
                 "train_seed": train_seed,
                 "comm_enabled": int(comm_enabled),
                 "eval_seed": eval_seed,
+                "eval_policy": "greedy" if greedy else "sample",
                 "scope": "regime",
                 "key": regime,
                 "n_rounds": int(acc["n_rounds"]),
@@ -229,6 +255,7 @@ def _eval_checkpoint(
                 "train_seed": train_seed,
                 "comm_enabled": int(comm_enabled),
                 "eval_seed": eval_seed,
+                "eval_policy": "greedy" if greedy else "sample",
                 "scope": "f_value",
                 "key": f_key,
                 "n_rounds": int(acc["n_rounds"]),
@@ -249,6 +276,7 @@ def _write_csv(path: str, rows: List[Dict]):
         "train_seed",
         "comm_enabled",
         "eval_seed",
+        "eval_policy",
         "scope",
         "key",
         "n_rounds",
@@ -293,6 +321,7 @@ def parse_args():
     p.add_argument("--checkpoints_glob", type=str, default="outputs/train/grid/*.pt")
     p.add_argument("--n_eval_episodes", type=int, default=300)
     p.add_argument("--eval_seed", type=int, default=9001)
+    p.add_argument("--greedy", action="store_true")
     p.add_argument("--out_csv", type=str, default="outputs/train/grid/regime_eval.csv")
     p.add_argument(
         "--out_condition_csv",
@@ -316,6 +345,7 @@ def main():
             checkpoint_path=ckpt,
             n_eval_episodes=args.n_eval_episodes,
             eval_seed=run_seed,
+            greedy=bool(args.greedy),
         )
         all_rows.extend(rows)
 
