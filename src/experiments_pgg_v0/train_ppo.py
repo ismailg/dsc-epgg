@@ -576,6 +576,7 @@ def _single_run(cfg: TrainConfig):
                         continue
                     for sender_id in sender_ids:
                         a_idx = sender_agent_idx[sender_id]
+                        # Use intended message (pre-dropout) to measure sender signaling capacity.
                         msg = int(buffer.message_actions[t, a_idx])
                         act = int(buffer.executed_actions[t, a_idx])
                         if msg < 0 or msg >= cfg.vocab_size:
