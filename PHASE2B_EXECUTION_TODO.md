@@ -5,7 +5,7 @@ Last updated: 2026-03-04 (local)
 ## 1) Diagnostic/tooling prerequisites (must complete first)
 - [x] Verify per-`f` cooperation is already streamed in `train_ppo.py` JSONL (`scope="f_value"`; window + cumulative).
 - [x] Verify evaluator already reports per-`f` breakdown (`scope="f_value"` rows in CSV).
-- [ ] Add comm metrics to trainer JSONL (`scope="comm"`):
+- [x] Add comm metrics to trainer JSONL (`scope="comm"`):
   - [x] `mi_message_f` over latest logging window
   - [x] `mi_message_action` over latest logging window
 - [x] Add `--greedy` mode to `evaluate_regime_conditional.py`:
