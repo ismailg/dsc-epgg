@@ -90,6 +90,8 @@ def _build_eval_objects(payload: Dict):
         msg_dropout=float(cfg.get("msg_dropout", 0.1)),
         default_endowment=float(cfg.get("endowment", 4.0)),
     )
+    value_time_feature = bool(cfg.get("value_time_feature", False))
+    value_obs_dim = wrapper.obs_dim + (1 if value_time_feature else 0)
 
     agents = {}
     for agent_id in agent_ids:
@@ -100,6 +102,7 @@ def _build_eval_objects(payload: Dict):
             can_send=can_send,
             vocab_size=vocab_size,
             hidden_size=int(cfg.get("hidden_size", 64)),
+            value_obs_dim=value_obs_dim,
             lr=float(cfg.get("lr", 3e-4)),
         )
         state = payload["agents"][agent_id]
@@ -114,7 +117,7 @@ def _build_eval_objects(payload: Dict):
         agents[agent_id] = agent
 
     env = pgg_parallel_v0.parallel_env(_env_cfg_from_train_cfg(cfg))
-    return cfg, env, wrapper, agents, agent_ids, sender_ids
+    return cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature
 
 
 def _eval_checkpoint(
@@ -123,7 +126,7 @@ def _eval_checkpoint(
     eval_seed: int,
 ) -> List[Dict]:
     payload = torch.load(checkpoint_path, map_location="cpu")
-    cfg, env, wrapper, agents, agent_ids, sender_ids = _build_eval_objects(payload)
+    cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature = _build_eval_objects(payload)
     _seed_everything(eval_seed)
 
     n_agents = int(cfg["n_agents"])
@@ -163,8 +166,18 @@ def _eval_checkpoint(
                     }
 
                 intended_actions = {}
+                t_frac = float(steps) / float(max(1, T - 1))
                 for agent_id in agent_ids:
-                    action, _lp, _value, _ent, _probs = agents[agent_id].sample_action(aug_obs[agent_id])
+                    value_obs = (
+                        np.concatenate(
+                            [aug_obs[agent_id], np.array([t_frac], dtype=np.float32)], axis=0
+                        ).astype(np.float32)
+                        if value_time_feature
+                        else aug_obs[agent_id]
+                    )
+                    action, _lp, _value, _ent, _probs = agents[agent_id].sample_action(
+                        aug_obs[agent_id], value_obs=value_obs
+                    )
                     intended_actions[agent_id] = int(action)
 
                 raw_next, rewards, done, infos = env.step(intended_actions)
