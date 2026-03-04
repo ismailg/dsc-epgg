@@ -21,7 +21,7 @@ Last updated: 2026-03-04 (local)
 - [x] Confirm comm JSONL records are emitted for a short comm-enabled run
 
 ## 3) Phase 2b pilot training (2 seeds)
-- [ ] Condition 2 pilot (`seed=101,202`, 200k, warm start from fixed-f `f=5` checkpoints)
+- [ ] Condition 2 pilot (`seed=101,202`, 200k, warm start from fixed-f `f=5` checkpoints) [IN PROGRESS: both runs active; reached 5k]
 - [ ] Condition 1 pilot (`seed=101,202`, 200k, comm enabled, warm start from fixed-f `f=5` checkpoints)
 - [ ] Enforce constraints:
   - [ ] Max 2 training processes in parallel
