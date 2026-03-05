@@ -9,7 +9,7 @@ import random
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 import numpy as np
 import torch
@@ -54,6 +54,7 @@ class TrainConfig:
     n_senders: int = 0
     vocab_size: int = 2
     msg_dropout: float = 0.1
+    msg_training_intervention: str = "none"
 
     hidden_size: int = 64
     value_time_feature: bool = True
@@ -63,6 +64,7 @@ class TrainConfig:
     clip_ratio: float = 0.2
     value_coeff: float = 0.5
     entropy_coeff: float = 0.01
+    msg_entropy_coeff: Optional[float] = None
     max_grad_norm: float = 0.5
     ppo_epochs: int = 4
     mini_batch_size: int = 32
@@ -92,6 +94,9 @@ class TrainConfig:
     regime_log_interval: int = 500
     metrics_jsonl_path: str = ""
     checkpoint_interval: int = 0
+    mi_null_perms: int = 200
+    mi_alpha: float = 0.05
+    log_trainer_responsiveness: bool = True
 
 
 def minimal_test_config(**overrides):
@@ -188,11 +193,97 @@ def _mutual_information_from_counts(counts: np.ndarray) -> float:
     return float(np.sum(p_xy[mask] * np.log2(p_xy[mask] / denom[mask])))
 
 
+def _entropy_from_counts_1d(counts: np.ndarray) -> float:
+    arr = np.asarray(counts, dtype=np.float64).reshape(-1)
+    total = float(np.sum(arr))
+    if total <= 0.0:
+        return 0.0
+    p = arr / total
+    mask = p > 0.0
+    return float(-np.sum(p[mask] * np.log2(p[mask])))
+
+
+def _mi_null_independence_stats(
+    counts: np.ndarray,
+    n_perms: int,
+    alpha: float,
+    rng: np.random.Generator,
+) -> Dict[str, float]:
+    arr = np.asarray(counts, dtype=np.float64)
+    observed_mi = _mutual_information_from_counts(arr)
+    total = int(round(float(np.sum(arr))))
+    n_perms = int(max(1, n_perms))
+    alpha = float(alpha)
+    if total <= 0:
+        return {
+            "mi_perm_p95": 0.0,
+            "mi_p_value": 1.0,
+            "mi_significant": False,
+            "mi_observed": float(observed_mi),
+        }
+
+    p_x = np.sum(arr, axis=1)
+    p_y = np.sum(arr, axis=0)
+    sx = float(np.sum(p_x))
+    sy = float(np.sum(p_y))
+    if sx <= 0.0 or sy <= 0.0:
+        return {
+            "mi_perm_p95": 0.0,
+            "mi_p_value": 1.0,
+            "mi_significant": False,
+            "mi_observed": float(observed_mi),
+        }
+    p_x = p_x / sx
+    p_y = p_y / sy
+    p_ind = np.outer(p_x, p_y).reshape(-1)
+    p_ind = p_ind / np.maximum(np.sum(p_ind), 1e-12)
+
+    null_mi = np.zeros((n_perms,), dtype=np.float64)
+    for i in range(n_perms):
+        sampled = rng.multinomial(total, p_ind).reshape(arr.shape)
+        null_mi[i] = _mutual_information_from_counts(sampled)
+
+    p95 = float(np.percentile(null_mi, 95.0))
+    p_value = float((1.0 + np.sum(null_mi >= observed_mi)) / float(n_perms + 1))
+    return {
+        "mi_perm_p95": p95,
+        "mi_p_value": p_value,
+        "mi_significant": bool(p_value < alpha and observed_mi > 1e-8),
+        "mi_observed": float(observed_mi),
+    }
+
+
 def _checkpoint_with_episode(base_path: str, episode_num: int) -> str:
     root, ext = os.path.splitext(base_path)
     if ext == "":
         ext = ".pt"
     return f"{root}_ep{int(episode_num)}{ext}"
+
+
+def _apply_training_message_intervention(
+    intervention: str,
+    delivered: Dict[str, int],
+    vocab_size: int,
+) -> Dict[str, int]:
+    mode = str(intervention or "none").strip().lower()
+    out = {sender_id: int(msg) for sender_id, msg in delivered.items()}
+    if mode == "none":
+        return out
+    if mode == "uniform":
+        return {
+            sender_id: int(np.random.randint(0, vocab_size))
+            for sender_id in out.keys()
+        }
+    if mode == "fixed0":
+        return {sender_id: 0 for sender_id in out.keys()}
+    if mode == "fixed1":
+        if int(vocab_size) < 2:
+            raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
+        return {sender_id: 1 for sender_id in out.keys()}
+    raise ValueError(
+        "unknown msg_training_intervention="
+        f"{intervention!r}; expected one of: none,uniform,fixed0,fixed1"
+    )
 
 
 def _set_agents_lr(agents: Dict[str, PPOAgentV2], lr_value: float):
@@ -309,6 +400,12 @@ def _single_run(cfg: TrainConfig):
     value_obs_dim = (5 + len(sender_ids) * cfg.vocab_size if cfg.comm_enabled else 5) + (
         1 if cfg.value_time_feature else 0
     )
+    if str(cfg.msg_training_intervention).strip().lower() != "none":
+        print(
+            "[msg-training-intervention] "
+            f"mode={cfg.msg_training_intervention} sign_lambda={cfg.sign_lambda} "
+            f"list_lambda={cfg.list_lambda}"
+        )
 
     env = _build_env(cfg)
     wrapper = ObservationWrapper(
@@ -329,6 +426,7 @@ def _single_run(cfg: TrainConfig):
         clip_ratio=cfg.clip_ratio,
         value_coeff=cfg.value_coeff,
         entropy_coeff=cfg.entropy_coeff,
+        msg_entropy_coeff=cfg.msg_entropy_coeff,
         max_grad_norm=cfg.max_grad_norm,
         ppo_epochs=cfg.ppo_epochs,
         mini_batch_size=cfg.mini_batch_size,
@@ -377,6 +475,12 @@ def _single_run(cfg: TrainConfig):
         }
 
     window_comm_counts = _new_comm_window_counts() if (cfg.comm_enabled and len(sender_ids) > 0) else {}
+    window_responsiveness = (
+        {agent_id: [] for agent_id in agent_ids}
+        if (cfg.comm_enabled and len(sender_ids) > 0 and cfg.log_trainer_responsiveness)
+        else {}
+    )
+    mi_rng = np.random.default_rng(int(cfg.seed) + 1729)
     best_metric = -float("inf")
     stale_epochs = 0
     for episode in range(cfg.n_episodes):
@@ -421,9 +525,19 @@ def _single_run(cfg: TrainConfig):
                     message_log_probs[sender_id] = msg_lp
 
                 dropped = wrapper.apply_msg_dropout(proposed)
-                for sender_id, msg in proposed.items():
-                    wrapper.update_msg_marginals(sender_id, msg)
-                current_messages = dropped
+                if str(cfg.msg_training_intervention).strip().lower() == "none":
+                    for sender_id, msg in proposed.items():
+                        wrapper.update_msg_marginals(sender_id, msg)
+                    current_messages = dropped
+                else:
+                    delivered = _apply_training_message_intervention(
+                        intervention=cfg.msg_training_intervention,
+                        delivered=dropped,
+                        vocab_size=cfg.vocab_size,
+                    )
+                    for sender_id, msg in delivered.items():
+                        wrapper.update_msg_marginals(sender_id, msg)
+                    current_messages = delivered
                 aug_obs = {
                     agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
                     for agent_id in agent_ids
@@ -468,6 +582,31 @@ def _single_run(cfg: TrainConfig):
                     listening_bonus[agent_id] = -float(
                         kl.detach().cpu().item()
                     )
+
+                    if cfg.log_trainer_responsiveness:
+                        # Diagnostics-only responsiveness proxy:
+                        # KL(pi(a|actual_msg) || pi(a|marginal_msg)), where marginal_msg
+                        # uses per-sender empirical message marginals from wrapper state.
+                        obs_marginal = obs_t.clone()
+                        msg_start = int(wrapper.message_start_idx)
+                        for s_idx, sender_id in enumerate(sender_ids):
+                            start = msg_start + s_idx * int(cfg.vocab_size)
+                            end = start + int(cfg.vocab_size)
+                            probs_msg = wrapper.msg_marginals.get(sender_id)
+                            if probs_msg is None:
+                                probs_msg = (
+                                    np.ones((cfg.vocab_size,), dtype=np.float32) / float(cfg.vocab_size)
+                                )
+                            obs_marginal[:, start:end] = torch.tensor(
+                                probs_msg,
+                                dtype=torch.float32,
+                                device=obs_t.device,
+                            ).unsqueeze(0)
+                        probs_marginal = agents[agent_id].action_distribution(obs_marginal).squeeze(0)
+                        kl_diag = torch.sum(
+                            probs_with * (torch.log(probs_with + eps) - torch.log(probs_marginal + eps))
+                        )
+                        window_responsiveness[agent_id].append(float(kl_diag.detach().cpu().item()))
 
             raw_obs_next, rewards, done, infos = env.step(intended_actions)
             rewards_raw = _to_float_rewards(rewards)
@@ -687,8 +826,20 @@ def _single_run(cfg: TrainConfig):
                     all_msg_f += msg_f_counts
                     all_msg_action += msg_action_counts
 
-                    mi_msg_f = _mutual_information_from_counts(msg_f_counts)
-                    mi_msg_action = _mutual_information_from_counts(msg_action_counts)
+                    mi_stats_f = _mi_null_independence_stats(
+                        msg_f_counts,
+                        n_perms=cfg.mi_null_perms,
+                        alpha=cfg.mi_alpha,
+                        rng=mi_rng,
+                    )
+                    mi_stats_action = _mi_null_independence_stats(
+                        msg_action_counts,
+                        n_perms=cfg.mi_null_perms,
+                        alpha=cfg.mi_alpha,
+                        rng=mi_rng,
+                    )
+                    msg_entropy = _entropy_from_counts_1d(np.sum(msg_f_counts, axis=1))
+                    msg_entropy_max = float(np.log2(max(1, int(cfg.vocab_size))))
                     _append_jsonl(
                         cfg.metrics_jsonl_path,
                         {
@@ -699,8 +850,15 @@ def _single_run(cfg: TrainConfig):
                             "key": sender_id,
                             "window": "window",
                             "metric": "mi_message_f",
-                            "mi": float(mi_msg_f),
+                            "mi": float(mi_stats_f["mi_observed"]),
                             "mi_unit": "bits",
+                            "mi_perm_p95": float(mi_stats_f["mi_perm_p95"]),
+                            "mi_p_value": float(mi_stats_f["mi_p_value"]),
+                            "mi_significant": bool(mi_stats_f["mi_significant"]),
+                            "mi_null_method": "independence_multinomial",
+                            "mi_null_perms": int(cfg.mi_null_perms),
+                            "h_message": float(msg_entropy),
+                            "h_message_max": float(msg_entropy_max),
                             "n_pairs": int(np.sum(msg_f_counts)),
                         },
                     )
@@ -714,16 +872,45 @@ def _single_run(cfg: TrainConfig):
                             "key": sender_id,
                             "window": "window",
                             "metric": "mi_message_action",
-                            "mi": float(mi_msg_action),
+                            "mi": float(mi_stats_action["mi_observed"]),
                             "mi_unit": "bits",
+                            "mi_perm_p95": float(mi_stats_action["mi_perm_p95"]),
+                            "mi_p_value": float(mi_stats_action["mi_p_value"]),
+                            "mi_significant": bool(mi_stats_action["mi_significant"]),
+                            "mi_null_method": "independence_multinomial",
+                            "mi_null_perms": int(cfg.mi_null_perms),
+                            "h_message": float(msg_entropy),
+                            "h_message_max": float(msg_entropy_max),
                             "n_pairs": int(np.sum(msg_action_counts)),
                         },
                     )
 
-                mi_all_msg_f = _mutual_information_from_counts(all_msg_f)
-                mi_all_msg_action = _mutual_information_from_counts(all_msg_action)
+                mi_all_stats_f = _mi_null_independence_stats(
+                    all_msg_f,
+                    n_perms=cfg.mi_null_perms,
+                    alpha=cfg.mi_alpha,
+                    rng=mi_rng,
+                )
+                mi_all_stats_action = _mi_null_independence_stats(
+                    all_msg_action,
+                    n_perms=cfg.mi_null_perms,
+                    alpha=cfg.mi_alpha,
+                    rng=mi_rng,
+                )
+                msg_all_entropy = _entropy_from_counts_1d(np.sum(all_msg_f, axis=1))
+                msg_entropy_max = float(np.log2(max(1, int(cfg.vocab_size))))
+                mi_all_msg_f = float(mi_all_stats_f["mi_observed"])
+                mi_all_msg_action = float(mi_all_stats_action["mi_observed"])
                 summary_chunks.append(f"mi(m;f)={mi_all_msg_f:.3f}")
                 summary_chunks.append(f"mi(m;a)={mi_all_msg_action:.3f}")
+                all_resp = np.array([], dtype=np.float64)
+                if cfg.log_trainer_responsiveness:
+                    all_resp = np.array(
+                        [x for values in window_responsiveness.values() for x in values],
+                        dtype=np.float64,
+                    )
+                if all_resp.size > 0:
+                    summary_chunks.append(f"resp={float(np.mean(all_resp)):.3f}")
                 _append_jsonl(
                     cfg.metrics_jsonl_path,
                     {
@@ -736,6 +923,13 @@ def _single_run(cfg: TrainConfig):
                         "metric": "mi_message_f",
                         "mi": float(mi_all_msg_f),
                         "mi_unit": "bits",
+                        "mi_perm_p95": float(mi_all_stats_f["mi_perm_p95"]),
+                        "mi_p_value": float(mi_all_stats_f["mi_p_value"]),
+                        "mi_significant": bool(mi_all_stats_f["mi_significant"]),
+                        "mi_null_method": "independence_multinomial",
+                        "mi_null_perms": int(cfg.mi_null_perms),
+                        "h_message": float(msg_all_entropy),
+                        "h_message_max": float(msg_entropy_max),
                         "n_pairs": int(np.sum(all_msg_f)),
                     },
                 )
@@ -751,9 +945,52 @@ def _single_run(cfg: TrainConfig):
                         "metric": "mi_message_action",
                         "mi": float(mi_all_msg_action),
                         "mi_unit": "bits",
+                        "mi_perm_p95": float(mi_all_stats_action["mi_perm_p95"]),
+                        "mi_p_value": float(mi_all_stats_action["mi_p_value"]),
+                        "mi_significant": bool(mi_all_stats_action["mi_significant"]),
+                        "mi_null_method": "independence_multinomial",
+                        "mi_null_perms": int(cfg.mi_null_perms),
+                        "h_message": float(msg_all_entropy),
+                        "h_message_max": float(msg_entropy_max),
                         "n_pairs": int(np.sum(all_msg_action)),
                     },
                 )
+                if cfg.log_trainer_responsiveness:
+                    for agent_id in agent_ids:
+                        agent_resp = np.asarray(window_responsiveness.get(agent_id, []), dtype=np.float64)
+                        if agent_resp.size == 0:
+                            continue
+                        _append_jsonl(
+                            cfg.metrics_jsonl_path,
+                            {
+                                "episode": int(episode + 1),
+                                "seed": int(cfg.seed),
+                                "condition": str(cfg.condition_name),
+                                "scope": "comm",
+                                "key": str(agent_id),
+                                "window": "window",
+                                "metric": "responsiveness_kl",
+                                "value": float(np.mean(agent_resp)),
+                                "value_std": float(np.std(agent_resp)),
+                                "n_pairs": int(agent_resp.size),
+                            },
+                        )
+                    if all_resp.size > 0:
+                        _append_jsonl(
+                            cfg.metrics_jsonl_path,
+                            {
+                                "episode": int(episode + 1),
+                                "seed": int(cfg.seed),
+                                "condition": str(cfg.condition_name),
+                                "scope": "comm",
+                                "key": "all_agents",
+                                "window": "window",
+                                "metric": "responsiveness_kl",
+                                "value": float(np.mean(all_resp)),
+                                "value_std": float(np.std(all_resp)),
+                                "n_pairs": int(all_resp.size),
+                            },
+                        )
 
             print(
                 f"[regime @ episode {episode + 1:04d}] " + " ".join(summary_chunks)
@@ -766,6 +1003,8 @@ def _single_run(cfg: TrainConfig):
             window_f_acc = {}
             if cfg.comm_enabled and len(sender_ids) > 0:
                 window_comm_counts = _new_comm_window_counts()
+                if cfg.log_trainer_responsiveness:
+                    window_responsiveness = {agent_id: [] for agent_id in agent_ids}
 
         if (
             cfg.checkpoint_interval > 0
@@ -855,6 +1094,12 @@ def parse_args():
     parser.add_argument("--n_senders", type=int, default=0)
     parser.add_argument("--vocab_size", type=int, default=2)
     parser.add_argument("--msg_dropout", type=float, default=0.1)
+    parser.add_argument(
+        "--msg_training_intervention",
+        type=str,
+        default="none",
+        choices=["none", "uniform", "fixed0", "fixed1"],
+    )
     parser.add_argument("--hidden_size", type=int, default=64)
     parser.add_argument("--disable_value_time_feature", action="store_true")
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -863,6 +1108,12 @@ def parse_args():
     parser.add_argument("--clip_ratio", type=float, default=0.2)
     parser.add_argument("--value_coeff", type=float, default=0.5)
     parser.add_argument("--entropy_coeff", type=float, default=0.01)
+    parser.add_argument(
+        "--msg_entropy_coeff",
+        type=float,
+        default=None,
+        help="Entropy coeff for message head. If omitted, uses --entropy_coeff for both.",
+    )
     parser.add_argument("--max_grad_norm", type=float, default=0.5)
     parser.add_argument("--ppo_epochs", type=int, default=4)
     parser.add_argument("--mini_batch_size", type=int, default=32)
@@ -891,6 +1142,9 @@ def parse_args():
     parser.add_argument("--regime_log_interval", type=int, default=500)
     parser.add_argument("--metrics_jsonl_path", type=str, default="")
     parser.add_argument("--checkpoint_interval", type=int, default=0)
+    parser.add_argument("--mi_null_perms", type=int, default=200)
+    parser.add_argument("--mi_alpha", type=float, default=0.05)
+    parser.add_argument("--disable_trainer_responsiveness_logging", action="store_true")
     return parser.parse_args()
 
 
@@ -913,6 +1167,7 @@ def args_to_config(args) -> TrainConfig:
         n_senders=resolved_n_senders,
         vocab_size=args.vocab_size,
         msg_dropout=args.msg_dropout,
+        msg_training_intervention=args.msg_training_intervention,
         hidden_size=args.hidden_size,
         value_time_feature=not bool(args.disable_value_time_feature),
         lr=args.lr,
@@ -921,6 +1176,7 @@ def args_to_config(args) -> TrainConfig:
         clip_ratio=args.clip_ratio,
         value_coeff=args.value_coeff,
         entropy_coeff=args.entropy_coeff,
+        msg_entropy_coeff=args.msg_entropy_coeff,
         max_grad_norm=args.max_grad_norm,
         ppo_epochs=args.ppo_epochs,
         mini_batch_size=args.mini_batch_size,
@@ -949,6 +1205,9 @@ def args_to_config(args) -> TrainConfig:
         regime_log_interval=args.regime_log_interval,
         metrics_jsonl_path=args.metrics_jsonl_path,
         checkpoint_interval=args.checkpoint_interval,
+        mi_null_perms=args.mi_null_perms,
+        mi_alpha=args.mi_alpha,
+        log_trainer_responsiveness=not bool(args.disable_trainer_responsiveness_logging),
     )
     if len(cfg.sigmas) != cfg.n_agents:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
@@ -958,10 +1217,24 @@ def args_to_config(args) -> TrainConfig:
         raise ValueError("n_senders must be in [0, n_agents]")
     if cfg.comm_enabled and cfg.n_senders <= 0:
         raise ValueError("comm_enabled requires n_senders > 0")
+    if (not cfg.comm_enabled) and str(cfg.msg_training_intervention) != "none":
+        raise ValueError("msg_training_intervention requires comm_enabled")
+    if str(cfg.msg_training_intervention) != "none" and (
+        float(cfg.sign_lambda) != 0.0 or float(cfg.list_lambda) != 0.0
+    ):
+        raise ValueError(
+            "msg_training_intervention requires sign_lambda=0 and list_lambda=0"
+        )
+    if str(cfg.msg_training_intervention) == "fixed1" and int(cfg.vocab_size) < 2:
+        raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
     if cfg.regime_log_interval <= 0:
         raise ValueError("regime_log_interval must be > 0")
     if cfg.checkpoint_interval < 0:
         raise ValueError("checkpoint_interval must be >= 0")
+    if cfg.mi_null_perms <= 0:
+        raise ValueError("mi_null_perms must be > 0")
+    if not (0.0 < float(cfg.mi_alpha) < 1.0):
+        raise ValueError("mi_alpha must be in (0, 1)")
     return cfg
 
 
