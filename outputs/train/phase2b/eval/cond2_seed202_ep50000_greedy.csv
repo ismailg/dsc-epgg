@@ -1,0 +1,9 @@
+checkpoint,condition,train_seed,comm_enabled,eval_seed,eval_policy,scope,key,n_rounds,coop_rate,avg_reward
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,regime,competitive,5309,0.000565078169146732,3.9988698436617067
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,regime,cooperative,6363,0.642975011786893,14.287600188590288
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,regime,mixed,18328,0.08920776953295505,4.864960715844609
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,f_value,0.500,5309,0.000565078169146732,3.9988698436617067
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,f_value,1.500,5852,0.00038448393711551607,4.000768967874231
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,f_value,2.500,6044,0.01981303772336201,4.118878226340172
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,f_value,3.500,6432,0.23523009950248755,6.352300995024875
+outputs/train/phase2b/cond2_seed202_ep50000.pt,unknown,-1,0,9001,greedy,f_value,5.000,6363,0.642975011786893,14.287600188590288

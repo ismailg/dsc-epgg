@@ -1,0 +1,159 @@
+[2026-03-04 14:06:34] phase2b watchdog started
+[2026-03-04 14:06:34] health_check complete (active=0)
+[2026-03-04 14:06:34] logged 14 new milestones
+[2026-03-04 14:07:23] phase2b watchdog started
+[2026-03-04 14:22:23] logged 1 new milestones
+[2026-03-04 14:32:23] logged 1 new milestones
+[2026-03-04 14:37:23] health_check complete (active=UNAVAILABLE)
+[2026-03-04 14:52:23] logged 1 new milestones
+[2026-03-04 14:57:23] logged 1 new milestones
+[2026-03-04 15:02:23] logged 1 new milestones
+[2026-03-04 15:07:24] health_check complete (active=UNAVAILABLE)
+[2026-03-04 15:12:24] logged 1 new milestones
+[2026-03-04 15:22:24] logged 1 new milestones
+[2026-03-04 15:27:24] logged 1 new milestones
+[2026-03-04 15:37:24] health_check complete (active=UNAVAILABLE)
+[2026-03-04 15:52:24] logged 2 new milestones
+[2026-03-04 15:52:24] eval start: cond2 seed=101 ep=100000 mode=sample
+[2026-03-04 15:52:48] eval done: cond2 seed=101 ep=100000 mode=sample
+[2026-03-04 15:52:53] eval start: cond2 seed=101 ep=100000 mode=greedy
+[2026-03-04 15:53:03] eval done: cond2 seed=101 ep=100000 mode=greedy
+[2026-03-04 15:58:08] logged 1 new milestones
+[2026-03-04 15:58:08] eval start: cond2 seed=202 ep=100000 mode=sample
+[2026-03-04 15:58:32] eval done: cond2 seed=202 ep=100000 mode=sample
+[2026-03-04 15:58:37] eval start: cond2 seed=202 ep=100000 mode=greedy
+[2026-03-04 15:58:47] eval done: cond2 seed=202 ep=100000 mode=greedy
+[2026-03-04 16:08:52] health_check complete (active=UNAVAILABLE)
+[2026-03-04 16:13:52] logged 1 new milestones
+[2026-03-04 16:18:52] logged 1 new milestones
+[2026-03-04 16:28:52] logged 1 new milestones
+[2026-03-04 16:38:52] health_check complete (active=UNAVAILABLE)
+[2026-03-04 16:43:52] logged 1 new milestones
+[2026-03-04 16:48:52] logged 1 new milestones
+[2026-03-04 16:58:52] logged 1 new milestones
+[2026-03-04 17:08:52] health_check complete (active=UNAVAILABLE)
+[2026-03-04 17:13:52] logged 1 new milestones
+[2026-03-04 17:18:52] logged 1 new milestones
+[2026-03-04 17:28:53] logged 1 new milestones
+[2026-03-04 17:38:53] health_check complete (active=UNAVAILABLE)
+[2026-03-04 17:38:53] logged 1 new milestones
+[2026-03-04 17:38:53] eval start: cond1 seed=101 ep=50000 mode=sample
+[2026-03-04 17:39:42] eval done: cond1 seed=101 ep=50000 mode=sample
+[2026-03-04 17:39:47] eval start: cond1 seed=101 ep=50000 mode=greedy
+[2026-03-04 17:40:02] eval done: cond1 seed=101 ep=50000 mode=greedy
+[2026-03-04 17:45:07] logged 1 new milestones
+[2026-03-04 17:55:08] logged 1 new milestones
+[2026-03-04 18:10:08] health_check complete (active=UNAVAILABLE)
+[2026-03-04 18:15:08] logged 1 new milestones
+[2026-03-04 18:15:08] eval start: cond2 seed=101 ep=150000 mode=sample
+[2026-03-04 18:15:33] eval done: cond2 seed=101 ep=150000 mode=sample
+[2026-03-04 18:15:38] eval start: cond2 seed=101 ep=150000 mode=greedy
+[2026-03-04 18:15:48] eval done: cond2 seed=101 ep=150000 mode=greedy
+[2026-03-04 18:20:53] logged 1 new milestones
+[2026-03-04 18:20:53] eval start: cond1 seed=202 ep=50000 mode=sample
+[2026-03-04 18:21:30] eval done: cond1 seed=202 ep=50000 mode=sample
+[2026-03-04 18:21:35] eval start: cond1 seed=202 ep=50000 mode=greedy
+[2026-03-04 18:21:50] eval done: cond1 seed=202 ep=50000 mode=greedy
+[2026-03-04 18:26:55] logged 1 new milestones
+[2026-03-04 18:26:55] eval start: cond2 seed=202 ep=150000 mode=sample
+[2026-03-04 18:27:19] eval done: cond2 seed=202 ep=150000 mode=sample
+[2026-03-04 18:27:24] eval start: cond2 seed=202 ep=150000 mode=greedy
+[2026-03-04 18:27:34] eval done: cond2 seed=202 ep=150000 mode=greedy
+[2026-03-04 18:32:39] logged 1 new milestones
+[2026-03-04 18:42:39] health_check complete (active=UNAVAILABLE)
+[2026-03-04 18:42:39] logged 1 new milestones
+[2026-03-04 18:52:39] logged 1 new milestones
+[2026-03-04 19:12:39] health_check complete (active=UNAVAILABLE)
+[2026-03-04 19:12:39] logged 1 new milestones
+[2026-03-04 19:17:39] logged 1 new milestones
+[2026-03-04 19:22:39] logged 1 new milestones
+[2026-03-04 19:27:39] logged 1 new milestones
+[2026-03-04 19:42:40] health_check complete (active=UNAVAILABLE)
+[2026-03-04 19:42:40] logged 1 new milestones
+[2026-03-04 19:52:40] logged 1 new milestones
+[2026-03-04 20:12:40] health_check complete (active=UNAVAILABLE)
+[2026-03-04 20:12:40] logged 1 new milestones
+[2026-03-04 20:22:40] logged 3 new milestones
+[2026-03-04 20:42:40] health_check complete (active=UNAVAILABLE)
+[2026-03-04 20:42:40] logged 1 new milestones
+[2026-03-04 20:42:40] eval start: cond2 seed=101 ep=200000 mode=sample
+[2026-03-04 20:43:06] eval done: cond2 seed=101 ep=200000 mode=sample
+[2026-03-04 20:43:11] eval start: cond2 seed=101 ep=200000 mode=greedy
+[2026-03-04 20:43:21] eval done: cond2 seed=101 ep=200000 mode=greedy
+[2026-03-04 20:53:26] logged 1 new milestones
+[2026-03-04 20:53:26] eval start: cond2 seed=202 ep=200000 mode=sample
+[2026-03-04 20:53:49] eval done: cond2 seed=202 ep=200000 mode=sample
+[2026-03-04 20:53:54] eval start: cond2 seed=202 ep=200000 mode=greedy
+[2026-03-04 20:54:03] eval done: cond2 seed=202 ep=200000 mode=greedy
+[2026-03-04 21:14:09] health_check complete (active=UNAVAILABLE)
+[2026-03-04 21:14:09] logged 1 new milestones
+[2026-03-04 21:24:09] logged 1 new milestones
+[2026-03-04 21:44:09] health_check complete (active=UNAVAILABLE)
+[2026-03-04 22:04:09] logged 1 new milestones
+[2026-03-04 22:04:09] eval start: cond1 seed=101 ep=100000 mode=sample
+[2026-03-04 22:04:48] eval done: cond1 seed=101 ep=100000 mode=sample
+[2026-03-04 22:04:53] eval start: cond1 seed=101 ep=100000 mode=greedy
+[2026-03-04 22:05:08] eval done: cond1 seed=101 ep=100000 mode=greedy
+[2026-03-04 22:15:13] health_check complete (active=UNAVAILABLE)
+[2026-03-04 22:20:14] logged 1 new milestones
+[2026-03-04 22:45:14] health_check complete (active=UNAVAILABLE)
+[2026-03-04 22:55:14] logged 1 new milestones
+[2026-03-04 23:15:14] health_check complete (active=UNAVAILABLE)
+[2026-03-04 23:15:14] logged 1 new milestones
+[2026-03-04 23:15:14] eval start: cond1 seed=202 ep=100000 mode=sample
+[2026-03-04 23:15:52] eval done: cond1 seed=202 ep=100000 mode=sample
+[2026-03-04 23:15:57] eval start: cond1 seed=202 ep=100000 mode=greedy
+[2026-03-04 23:16:11] eval done: cond1 seed=202 ep=100000 mode=greedy
+[2026-03-04 23:41:16] logged 1 new milestones
+[2026-03-04 23:46:17] health_check complete (active=UNAVAILABLE)
+[2026-03-05 00:11:17] logged 1 new milestones
+[2026-03-05 00:16:17] health_check complete (active=UNAVAILABLE)
+[2026-03-05 00:26:17] logged 1 new milestones
+[2026-03-05 00:46:17] health_check complete (active=UNAVAILABLE)
+[2026-03-05 01:01:17] logged 1 new milestones
+[2026-03-05 01:11:17] logged 1 new milestones
+[2026-03-05 01:16:17] health_check complete (active=UNAVAILABLE)
+[2026-03-05 01:46:18] health_check complete (active=UNAVAILABLE)
+[2026-03-05 01:56:18] logged 2 new milestones
+[2026-03-05 01:56:18] eval start: cond1 seed=101 ep=150000 mode=sample
+[2026-03-05 01:56:54] eval done: cond1 seed=101 ep=150000 mode=sample
+[2026-03-05 01:56:59] eval start: cond1 seed=101 ep=150000 mode=greedy
+[2026-03-05 01:57:12] eval done: cond1 seed=101 ep=150000 mode=greedy
+[2026-03-05 02:17:18] health_check complete (active=UNAVAILABLE)
+[2026-03-05 02:42:18] logged 1 new milestones
+[2026-03-05 02:47:18] health_check complete (active=UNAVAILABLE)
+[2026-03-05 02:47:18] logged 1 new milestones
+[2026-03-05 03:17:18] health_check complete (active=UNAVAILABLE)
+[2026-03-05 03:27:18] logged 1 new milestones
+[2026-03-05 03:37:19] logged 1 new milestones
+[2026-03-05 03:37:19] eval start: cond1 seed=202 ep=150000 mode=sample
+[2026-03-05 03:37:55] eval done: cond1 seed=202 ep=150000 mode=sample
+[2026-03-05 03:38:00] eval start: cond1 seed=202 ep=150000 mode=greedy
+[2026-03-05 03:38:13] eval done: cond1 seed=202 ep=150000 mode=greedy
+[2026-03-05 03:48:19] health_check complete (active=UNAVAILABLE)
+[2026-03-05 04:13:19] logged 1 new milestones
+[2026-03-05 04:18:19] health_check complete (active=UNAVAILABLE)
+[2026-03-05 04:33:19] logged 1 new milestones
+[2026-03-05 04:48:19] health_check complete (active=UNAVAILABLE)
+[2026-03-05 04:58:19] logged 1 new milestones
+[2026-03-05 05:18:20] health_check complete (active=UNAVAILABLE)
+[2026-03-05 05:23:20] logged 1 new milestones
+[2026-03-05 05:43:20] logged 1 new milestones
+[2026-03-05 05:43:20] eval start: cond1 seed=101 ep=200000 mode=sample
+[2026-03-05 05:43:55] eval done: cond1 seed=101 ep=200000 mode=sample
+[2026-03-05 05:44:00] eval start: cond1 seed=101 ep=200000 mode=greedy
+[2026-03-05 05:44:13] eval done: cond1 seed=101 ep=200000 mode=greedy
+[2026-03-05 05:49:18] health_check complete (active=UNAVAILABLE)
+[2026-03-05 06:19:18] health_check complete (active=UNAVAILABLE)
+[2026-03-05 06:19:18] logged 1 new milestones
+[2026-03-05 06:49:19] health_check complete (active=UNAVAILABLE)
+[2026-03-05 07:09:19] logged 1 new milestones
+[2026-03-05 07:19:19] health_check complete (active=UNAVAILABLE)
+[2026-03-05 07:49:19] health_check complete (active=UNAVAILABLE)
+[2026-03-05 08:04:20] logged 1 new milestones
+[2026-03-05 08:04:20] eval start: cond1 seed=202 ep=200000 mode=sample
+[2026-03-05 08:04:53] eval done: cond1 seed=202 ep=200000 mode=sample
+[2026-03-05 08:04:58] eval start: cond1 seed=202 ep=200000 mode=greedy
+[2026-03-05 08:05:11] eval done: cond1 seed=202 ep=200000 mode=greedy
+[2026-03-05 08:20:16] health_check complete (active=UNAVAILABLE)
+[2026-03-05 08:50:16] health_check complete (active=UNAVAILABLE)

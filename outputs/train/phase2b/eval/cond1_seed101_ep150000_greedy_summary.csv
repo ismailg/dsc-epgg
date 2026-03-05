@@ -1,0 +1,4 @@
+condition,regime,eval_policy,n_rounds,coop_rate,avg_reward
+unknown,competitive,greedy,5288,0.006571482602118003,3.986857034795764
+unknown,cooperative,greedy,5917,0.7405357444651005,15.848571911441608
+unknown,mixed,greedy,18795,0.3216280925778133,6.823516892790636

@@ -1,0 +1,4 @@
+condition,regime,eval_policy,n_rounds,coop_rate,avg_reward
+unknown,competitive,sample,5309,0.0523639103409305,3.895272179318139
+unknown,cooperative,sample,6363,0.435957881502436,10.975326104038976
+unknown,mixed,sample,18328,0.19310617634220864,5.564955259711916

@@ -1,0 +1,9 @@
+checkpoint,condition,train_seed,comm_enabled,eval_seed,eval_policy,scope,key,n_rounds,coop_rate,avg_reward
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,regime,competitive,5288,0.0,4.0
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,regime,cooperative,5917,0.2516477944904512,8.02636471184722
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,regime,mixed,18795,0.11811652035115722,5.094652833200319
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,f_value,0.500,5288,0.0,4.0
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,f_value,1.500,5824,0.0006868131868131869,4.001373626373627
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,f_value,2.500,6298,0.06327405525563672,4.37964433153382
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,f_value,3.500,6673,0.2723662520605425,6.723662520605425
+/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/train/phase2b/cond1_seed101_ep100000.pt,unknown,-1,1,9001,greedy,f_value,5.000,5917,0.2516477944904512,8.02636471184722
