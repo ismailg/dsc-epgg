@@ -4,6 +4,7 @@ import argparse
 import csv
 import glob
 import itertools
+import json
 import os
 import random
 import re
@@ -254,6 +255,39 @@ def _apply_message_intervention(
     )
 
 
+def _parse_sender_flip_map(raw_json: str, sender_ids: List[str]) -> Dict[str, bool]:
+    text = str(raw_json or "").strip()
+    if text == "":
+        return {}
+    payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise ValueError("sender_flip_map_json must decode to an object")
+    out: Dict[str, bool] = {}
+    valid = set(sender_ids)
+    for key, value in payload.items():
+        sender_id = str(key)
+        if sender_id not in valid:
+            raise ValueError(f"sender_flip_map_json contains unknown sender_id: {sender_id}")
+        out[sender_id] = bool(int(value)) if isinstance(value, (int, float, bool)) else bool(value)
+    return out
+
+
+def _apply_sender_flip_map(
+    delivered: Dict[str, int],
+    sender_flip_map: Dict[str, bool],
+    vocab_size: int,
+) -> Dict[str, int]:
+    if len(sender_flip_map) == 0:
+        return {sender_id: int(token) for sender_id, token in delivered.items()}
+    if int(vocab_size) != 2:
+        raise ValueError("sender_flip_map_json currently requires vocab_size == 2")
+    out = {sender_id: int(token) for sender_id, token in delivered.items()}
+    for sender_id, should_flip in sender_flip_map.items():
+        if should_flip and sender_id in out:
+            out[sender_id] = 1 - int(out[sender_id])
+    return out
+
+
 def _posterior_bin_label(f_hat: float) -> str:
     if f_hat < 1.5:
         return "fhat<1.5"
@@ -313,6 +347,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             int(row["eval_seed"]),
             row["eval_policy"],
             row["ablation"],
+            row.get("sender_remap", "none"),
             row["cross_play"],
             sender_id,
         )
@@ -327,7 +362,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
 
     out = []
     for key, acc in sorted(by_fhat.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, cross_play, sender_id, fhat_bin = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, sender_id, fhat_bin = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -337,6 +372,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "sender_id": sender_id,
                 "summary": "p_msg1_given_fhat",
@@ -347,7 +383,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             }
         )
     for key, acc in sorted(by_action.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, cross_play, sender_id, action = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, sender_id, action = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -357,6 +393,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "sender_id": sender_id,
                 "summary": "p_msg1_given_action",
@@ -390,6 +427,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             int(row["eval_seed"]),
             row["eval_policy"],
             row["ablation"],
+            row.get("sender_remap", "none"),
             row["cross_play"],
         )
         fhat_bin = _posterior_bin_label(float(row["f_hat"]))
@@ -417,7 +455,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
 
     out = []
     for key, acc in sorted(by_pattern.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, cross_play, recv_pattern, fhat_bin = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, recv_pattern, fhat_bin = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -427,6 +465,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "receiver_id": "all_agents",
                 "sender_id": "",
@@ -440,7 +479,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             }
         )
     for key, acc in sorted(by_any_token.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, cross_play, any_token, fhat_bin = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, any_token, fhat_bin = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -450,6 +489,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "receiver_id": "all_agents",
                 "sender_id": "",
@@ -470,6 +510,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             eval_seed,
             eval_policy,
             ablation,
+            sender_remap,
             cross_play,
             receiver_id,
             sender_id,
@@ -485,6 +526,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "receiver_id": receiver_id,
                 "sender_id": sender_id,
@@ -556,6 +598,8 @@ def _eval_checkpoint(
     mi_null_perms: int = 200,
     mi_alpha: float = 0.05,
     cross_play_checkpoint: str = "",
+    sender_flip_map_json: str = "",
+    sender_remap_label: str = "none",
     posterior_strat: bool = False,
     collect_semantics: bool = False,
 ) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[Dict], List[Dict]]:
@@ -575,7 +619,9 @@ def _eval_checkpoint(
     msg_combos = _build_message_combos(vocab_size=vocab_size, n_senders=len(sender_ids))
     mi_rng = np.random.default_rng(int(eval_seed) + 1729)
     ablation_label = str(msg_intervention or "none").strip().lower()
+    sender_remap_label = str(sender_remap_label or "none").strip().lower() or "none"
     cross_play_label = "none"
+    sender_flip_map = _parse_sender_flip_map(sender_flip_map_json, sender_ids)
 
     msg_agents = agents
     cross_play_checkpoint = str(cross_play_checkpoint or "").strip()
@@ -713,6 +759,11 @@ def _eval_checkpoint(
                         sender_ids=sender_ids,
                         vocab_size=vocab_size,
                     )
+                    delivered = _apply_sender_flip_map(
+                        delivered=delivered,
+                        sender_flip_map=sender_flip_map,
+                        vocab_size=vocab_size,
+                    )
                     current_messages = delivered
                     aug_obs = {
                         agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
@@ -833,6 +884,7 @@ def _eval_checkpoint(
                                 "checkpoint": checkpoint_path,
                                 "eval_policy": "greedy" if greedy else "sample",
                                 "msg_intervention": ablation_label,
+                                "sender_remap": sender_remap_label,
                                 "cross_play": cross_play_label,
                                 "true_f": float(true_f),
                                 "f_hat": float(f_hat_by_agent.get(agent_id, 0.0)),
@@ -854,6 +906,7 @@ def _eval_checkpoint(
                             "eval_seed": int(eval_seed),
                             "eval_policy": "greedy" if greedy else "sample",
                             "ablation": ablation_label,
+                            "sender_remap": sender_remap_label,
                             "cross_play": cross_play_label,
                             "episode": int(_),
                             "t": int(steps),
@@ -895,6 +948,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "regime",
                 "key": regime,
@@ -933,6 +987,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "f_value",
                 "key": f_key,
@@ -971,6 +1026,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "comm",
                 "key": sender_id,
@@ -1023,6 +1079,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "comm",
                 "key": "all_senders",
@@ -1077,6 +1134,7 @@ def _eval_checkpoint(
                     "eval_seed": eval_seed,
                     "eval_policy": "greedy" if greedy else "sample",
                     "ablation": ablation_label,
+                    "sender_remap": sender_remap_label,
                     "cross_play": cross_play_label,
                     "scope": "comm",
                     "key": "all_agents",
@@ -1099,6 +1157,7 @@ def _eval_checkpoint(
                         "eval_seed": eval_seed,
                         "eval_policy": "greedy" if greedy else "sample",
                         "ablation": ablation_label,
+                        "sender_remap": sender_remap_label,
                         "cross_play": cross_play_label,
                         "scope": "comm",
                         "key": str(agent_id),
@@ -1122,6 +1181,7 @@ def _eval_checkpoint(
                     "eval_seed": eval_seed,
                     "eval_policy": "greedy" if greedy else "sample",
                     "ablation": ablation_label,
+                    "sender_remap": sender_remap_label,
                     "cross_play": cross_play_label,
                     "scope": "comm",
                     "key": "all_senders",
@@ -1144,6 +1204,7 @@ def _eval_checkpoint(
                         "eval_seed": eval_seed,
                         "eval_policy": "greedy" if greedy else "sample",
                         "ablation": ablation_label,
+                        "sender_remap": sender_remap_label,
                         "cross_play": cross_play_label,
                         "scope": "comm",
                         "key": str(sender_id),
@@ -1176,6 +1237,7 @@ def _eval_checkpoint(
                     "checkpoint": checkpoint_path,
                     "eval_policy": "greedy" if greedy else "sample",
                     "msg_intervention": ablation_label,
+                    "sender_remap": sender_remap_label,
                     "cross_play": cross_play_label,
                     "true_f": true_f,
                     "fhat_bin": bin_label,
@@ -1211,6 +1273,7 @@ def _write_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "sender_remap",
         "cross_play",
         "scope",
         "key",
@@ -1241,6 +1304,7 @@ def _write_comm_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "sender_remap",
         "cross_play",
         "scope",
         "key",
@@ -1275,6 +1339,7 @@ def _write_posterior_strat_csv(path: str, rows: List[Dict]):
         "checkpoint",
         "eval_policy",
         "msg_intervention",
+        "sender_remap",
         "cross_play",
         "true_f",
         "fhat_bin",
@@ -1302,6 +1367,7 @@ def _write_trace_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "sender_remap",
         "cross_play",
         "episode",
         "t",
@@ -1335,6 +1401,7 @@ def _write_sender_semantics_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "sender_remap",
         "cross_play",
         "sender_id",
         "summary",
@@ -1361,6 +1428,7 @@ def _write_receiver_semantics_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "sender_remap",
         "cross_play",
         "receiver_id",
         "sender_id",
@@ -1389,6 +1457,7 @@ def _condition_summary(rows: List[Dict]) -> List[Dict]:
             row["key"],
             row.get("eval_policy", "sample"),
             row.get("ablation", "none"),
+            row.get("sender_remap", "none"),
             row.get("cross_play", "none"),
         )
         n = int(row["n_rounds"])
@@ -1397,7 +1466,7 @@ def _condition_summary(rows: List[Dict]) -> List[Dict]:
         grouped[key]["reward_weighted"] += float(row["avg_reward"]) * n
 
     out = []
-    for (condition, regime, eval_policy, ablation, cross_play), acc in sorted(grouped.items()):
+    for (condition, regime, eval_policy, ablation, sender_remap, cross_play), acc in sorted(grouped.items()):
         n = max(1, int(acc["n_rounds"]))
         out.append(
             {
@@ -1405,6 +1474,7 @@ def _condition_summary(rows: List[Dict]) -> List[Dict]:
                 "regime": regime,
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "n_rounds": int(acc["n_rounds"]),
                 "coop_rate": float(acc["coop_weighted"] / n),
@@ -1429,6 +1499,8 @@ def parse_args():
     p.add_argument("--mi_null_perms", type=int, default=200)
     p.add_argument("--mi_alpha", type=float, default=0.05)
     p.add_argument("--cross_play_checkpoint", type=str, default="")
+    p.add_argument("--sender_flip_map_json", type=str, default="")
+    p.add_argument("--sender_remap_label", type=str, default="none")
     p.add_argument("--posterior_strat", action="store_true")
     p.add_argument("--out_csv", type=str, default="outputs/train/grid/regime_eval.csv")
     p.add_argument("--out_comm_csv", type=str, default="")
@@ -1494,6 +1566,8 @@ def main():
             mi_null_perms=int(args.mi_null_perms),
             mi_alpha=float(args.mi_alpha),
             cross_play_checkpoint=str(args.cross_play_checkpoint or ""),
+            sender_flip_map_json=str(args.sender_flip_map_json or ""),
+            sender_remap_label=str(args.sender_remap_label or "none"),
             posterior_strat=bool(args.posterior_strat),
             collect_semantics=collect_semantics,
         )
@@ -1522,6 +1596,7 @@ def main():
                 "regime",
                 "eval_policy",
                 "ablation",
+                "sender_remap",
                 "cross_play",
                 "n_rounds",
                 "coop_rate",
@@ -1553,7 +1628,7 @@ def main():
         print(
             "[summary] "
             f"{row['condition']} {row['regime']} "
-            f"[{row['eval_policy']}:{row['ablation']}:{row['cross_play']}] "
+            f"[{row['eval_policy']}:{row['ablation']}:{row['sender_remap']}:{row['cross_play']}] "
             f"coop={row['coop_rate']:.3f} reward={row['avg_reward']:.3f} "
             f"n_rounds={row['n_rounds']}"
         )

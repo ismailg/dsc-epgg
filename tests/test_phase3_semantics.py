@@ -2,6 +2,7 @@ import csv
 from pathlib import Path
 
 from src.analysis.evaluate_regime_conditional import (
+    _apply_sender_flip_map,
     _build_received_pattern,
     _derive_receiver_semantics_rows,
     _derive_sender_semantics_rows,
@@ -18,6 +19,16 @@ def test_build_received_pattern_excludes_self_and_is_stable():
     assert pattern == "agent_1:0|agent_2:1"
     assert any_m0 == 1
     assert any_m1 == 1
+
+
+def test_apply_sender_flip_map_flips_only_selected_senders():
+    delivered = {"agent_0": 0, "agent_1": 1, "agent_2": 1}
+    flipped = _apply_sender_flip_map(
+        delivered=delivered,
+        sender_flip_map={"agent_0": True, "agent_1": False},
+        vocab_size=2,
+    )
+    assert flipped == {"agent_0": 1, "agent_1": 1, "agent_2": 1}
 
 
 def test_trace_writer_has_stable_sender_columns(tmp_path: Path):
