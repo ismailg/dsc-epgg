@@ -135,25 +135,42 @@ def _build_job(args, condition: str, seed: int) -> Job:
 
 
 def _run_job(job: Job, skip_existing: bool) -> Dict:
+    lock_path = job.save_path + ".lock"
     if skip_existing and os.path.exists(job.save_path):
         return {"job": job.__dict__, "skipped": True, "returncode": 0}
     os.makedirs(os.path.dirname(job.save_path), exist_ok=True)
     os.makedirs(os.path.dirname(job.metrics_path), exist_ok=True)
     os.makedirs(os.path.dirname(job.log_path), exist_ok=True)
+    try:
+        lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+    except FileExistsError:
+        return {
+            "job": job.__dict__,
+            "skipped": True,
+            "returncode": 0,
+            "reason": "locked",
+        }
+    with os.fdopen(lock_fd, "w", encoding="utf-8") as f:
+        f.write(f"pid={os.getpid()}\n")
+
     env = os.environ.copy()
     env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
-    with open(job.log_path, "w", encoding="utf-8") as log_f:
-        proc = subprocess.run(
-            job.cmd,
-            cwd=_ROOT,
-            env=env,
-            stdout=log_f,
-            stderr=subprocess.STDOUT,
-            check=False,
-        )
-    if proc.returncode != 0:
-        raise subprocess.CalledProcessError(proc.returncode, job.cmd)
-    return {"job": job.__dict__, "skipped": False, "returncode": int(proc.returncode)}
+    try:
+        with open(job.log_path, "w", encoding="utf-8") as log_f:
+            proc = subprocess.run(
+                job.cmd,
+                cwd=_ROOT,
+                env=env,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                check=False,
+            )
+        if proc.returncode != 0:
+            raise subprocess.CalledProcessError(proc.returncode, job.cmd)
+        return {"job": job.__dict__, "skipped": False, "returncode": int(proc.returncode)}
+    finally:
+        if os.path.exists(lock_path):
+            os.remove(lock_path)
 
 
 def parse_args():
