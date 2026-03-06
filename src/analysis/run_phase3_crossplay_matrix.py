@@ -150,6 +150,8 @@ def parse_args():
         type=int,
         default=[50000, 100000, 150000, 200000],
     )
+    p.add_argument("--sender_milestones", nargs="*", type=int, default=None)
+    p.add_argument("--receiver_milestones", nargs="*", type=int, default=None)
     p.add_argument("--n_eval_episodes", type=int, default=300)
     p.add_argument("--eval_seed", type=int, default=9001)
     p.add_argument("--max_workers", type=int, default=4)
@@ -165,16 +167,27 @@ def main():
     os.makedirs(raw_dir, exist_ok=True)
     os.makedirs(log_dir, exist_ok=True)
 
+    sender_milestones = (
+        [int(v) for v in args.sender_milestones]
+        if args.sender_milestones is not None and len(args.sender_milestones) > 0
+        else [int(v) for v in args.milestones]
+    )
+    receiver_milestones = (
+        [int(v) for v in args.receiver_milestones]
+        if args.receiver_milestones is not None and len(args.receiver_milestones) > 0
+        else [int(v) for v in args.milestones]
+    )
+
     tasks = []
     for seed in args.seeds:
-        for sender_episode in args.milestones:
+        for sender_episode in sender_milestones:
             sender_ckpt = _checkpoint_path(
                 checkpoint_dir=args.checkpoint_dir,
                 condition=args.condition,
                 seed=int(seed),
                 episode=int(sender_episode),
             )
-            for receiver_episode in args.milestones:
+            for receiver_episode in receiver_milestones:
                 receiver_ckpt = _checkpoint_path(
                     checkpoint_dir=args.checkpoint_dir,
                     condition=args.condition,

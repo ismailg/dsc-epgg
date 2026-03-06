@@ -70,6 +70,9 @@ def test_sender_and_receiver_semantics_recover_known_patterns():
             "f_hat": 4.8,
             "action": 1,
             "own_sent_msg": 1,
+            "delivered_msg_agent_0": 1,
+            "delivered_msg_agent_1": 1,
+            "delivered_msg_agent_2": 1,
             "recv_any_m0": 0,
             "recv_any_m1": 1,
             "recv_pattern": "agent_1:1|agent_2:1",
@@ -86,6 +89,9 @@ def test_sender_and_receiver_semantics_recover_known_patterns():
             "f_hat": 0.4,
             "action": 0,
             "own_sent_msg": 0,
+            "delivered_msg_agent_0": 0,
+            "delivered_msg_agent_1": 0,
+            "delivered_msg_agent_2": 0,
             "recv_any_m0": 1,
             "recv_any_m1": 0,
             "recv_pattern": "agent_1:0|agent_2:0",
@@ -102,6 +108,9 @@ def test_sender_and_receiver_semantics_recover_known_patterns():
             "f_hat": 4.9,
             "action": 1,
             "own_sent_msg": "",
+            "delivered_msg_agent_0": 1,
+            "delivered_msg_agent_1": 1,
+            "delivered_msg_agent_2": 1,
             "recv_any_m0": 0,
             "recv_any_m1": 1,
             "recv_pattern": "agent_0:1|agent_1:1",
@@ -118,6 +127,9 @@ def test_sender_and_receiver_semantics_recover_known_patterns():
             "f_hat": 0.8,
             "action": 0,
             "own_sent_msg": "",
+            "delivered_msg_agent_0": 0,
+            "delivered_msg_agent_1": 0,
+            "delivered_msg_agent_2": 0,
             "recv_any_m0": 1,
             "recv_any_m1": 0,
             "recv_pattern": "agent_0:0|agent_1:0",
@@ -144,5 +156,28 @@ def test_sender_and_receiver_semantics_recover_known_patterns():
     )
     assert (
         by_receiver[("p_coop_given_any_token_fhat", "", "0", "fhat<1.5")]["p_cooperate"]
+        == 0.0
+    )
+    sender_specific = {
+        (
+            row["summary"],
+            row["receiver_id"],
+            row["sender_id"],
+            str(row["sender_token"]),
+            row["fhat_bin"],
+        ): row
+        for row in receiver_rows
+        if row["summary"] == "p_coop_given_sender_token_fhat"
+    }
+    assert (
+        sender_specific[
+            ("p_coop_given_sender_token_fhat", "agent_2", "agent_0", "1", "fhat>=4.5")
+        ]["p_cooperate"]
+        == 1.0
+    )
+    assert (
+        sender_specific[
+            ("p_coop_given_sender_token_fhat", "agent_2", "agent_0", "0", "fhat<1.5")
+        ]["p_cooperate"]
         == 0.0
     )

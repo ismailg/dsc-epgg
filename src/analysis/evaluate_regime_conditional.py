@@ -375,6 +375,10 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
 
     by_pattern = defaultdict(lambda: {"n_obs": 0, "coop_sum": 0.0})
     by_any_token = defaultdict(lambda: {"n_obs": 0, "coop_sum": 0.0})
+    by_sender_token = defaultdict(lambda: {"n_obs": 0, "coop_sum": 0.0})
+    delivered_cols = sorted(
+        {key for row in trace_rows for key in row.keys() if key.startswith("delivered_msg_")}
+    )
     for row in trace_rows:
         recv_pattern = str(row.get("recv_pattern", ""))
         if recv_pattern == "":
@@ -399,6 +403,18 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             by_any_token[meta + (token, fhat_bin)]["n_obs"] += 1
             by_any_token[meta + (token, fhat_bin)]["coop_sum"] += action
 
+        receiver_id = str(row.get("agent_id", ""))
+        for delivered_col in delivered_cols:
+            sender_id = str(delivered_col).replace("delivered_msg_", "", 1)
+            if sender_id == receiver_id:
+                continue
+            delivered_value = row.get(delivered_col, "")
+            if delivered_value in ("", None):
+                continue
+            token = int(float(delivered_value))
+            by_sender_token[meta + (receiver_id, sender_id, token, fhat_bin)]["n_obs"] += 1
+            by_sender_token[meta + (receiver_id, sender_id, token, fhat_bin)]["coop_sum"] += action
+
     out = []
     for key, acc in sorted(by_pattern.items()):
         checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, cross_play, recv_pattern, fhat_bin = key
@@ -413,9 +429,11 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "ablation": ablation,
                 "cross_play": cross_play,
                 "receiver_id": "all_agents",
+                "sender_id": "",
                 "summary": "p_coop_given_recv_pattern_fhat",
                 "recv_pattern": recv_pattern,
                 "any_token": "",
+                "sender_token": "",
                 "fhat_bin": fhat_bin,
                 "n_obs": n_obs,
                 "p_cooperate": float(acc["coop_sum"] / max(1, n_obs)),
@@ -434,9 +452,46 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "ablation": ablation,
                 "cross_play": cross_play,
                 "receiver_id": "all_agents",
+                "sender_id": "",
                 "summary": "p_coop_given_any_token_fhat",
                 "recv_pattern": "",
                 "any_token": int(any_token),
+                "sender_token": "",
+                "fhat_bin": fhat_bin,
+                "n_obs": n_obs,
+                "p_cooperate": float(acc["coop_sum"] / max(1, n_obs)),
+            }
+        )
+    for key, acc in sorted(by_sender_token.items()):
+        (
+            checkpoint,
+            condition,
+            train_seed,
+            eval_seed,
+            eval_policy,
+            ablation,
+            cross_play,
+            receiver_id,
+            sender_id,
+            sender_token,
+            fhat_bin,
+        ) = key
+        n_obs = int(acc["n_obs"])
+        out.append(
+            {
+                "checkpoint": checkpoint,
+                "condition": condition,
+                "train_seed": int(train_seed),
+                "eval_seed": int(eval_seed),
+                "eval_policy": eval_policy,
+                "ablation": ablation,
+                "cross_play": cross_play,
+                "receiver_id": receiver_id,
+                "sender_id": sender_id,
+                "summary": "p_coop_given_sender_token_fhat",
+                "recv_pattern": "",
+                "any_token": "",
+                "sender_token": int(sender_token),
                 "fhat_bin": fhat_bin,
                 "n_obs": n_obs,
                 "p_cooperate": float(acc["coop_sum"] / max(1, n_obs)),
@@ -1308,9 +1363,11 @@ def _write_receiver_semantics_csv(path: str, rows: List[Dict]):
         "ablation",
         "cross_play",
         "receiver_id",
+        "sender_id",
         "summary",
         "recv_pattern",
         "any_token",
+        "sender_token",
         "fhat_bin",
         "n_obs",
         "p_cooperate",

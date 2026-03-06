@@ -174,6 +174,9 @@ def _sender_semantics_summary(rows: List[Dict]) -> List[Dict]:
             row.get("condition"),
             _as_int(row, "train_seed", -1),
             _as_int(row, "checkpoint_episode", 0),
+            row.get("eval_policy", "greedy"),
+            row.get("ablation", "none"),
+            row.get("cross_play", "none"),
             row.get("sender_id"),
         )
         if row.get("summary") == "p_msg1_given_action":
@@ -184,7 +187,7 @@ def _sender_semantics_summary(rows: List[Dict]) -> List[Dict]:
     out = []
     keys = {key[:-1] for key in p_action.keys()} | {key[:-1] for key in p_fhat.keys()}
     for key in sorted(keys):
-        condition, seed, episode, sender_id = key
+        condition, seed, episode, eval_policy, ablation, cross_play, sender_id = key
         action_delta = p_action.get(key + ("1",), 0.0) - p_action.get(key + ("0",), 0.0)
         high_f = p_fhat.get(key + ("fhat>=4.5",), 0.0)
         low_f = p_fhat.get(key + ("fhat<1.5",), 0.0)
@@ -193,6 +196,9 @@ def _sender_semantics_summary(rows: List[Dict]) -> List[Dict]:
                 "condition": condition,
                 "train_seed": int(seed),
                 "checkpoint_episode": int(episode),
+                "eval_policy": eval_policy,
+                "ablation": ablation,
+                "cross_play": cross_play,
                 "sender_id": sender_id,
                 "p_msg1_given_action1": p_action.get(key + ("1",), ""),
                 "p_msg1_given_action0": p_action.get(key + ("0",), ""),
@@ -214,6 +220,9 @@ def _receiver_semantics_summary(rows: List[Dict]) -> List[Dict]:
             row.get("condition"),
             _as_int(row, "train_seed", -1),
             _as_int(row, "checkpoint_episode", 0),
+            row.get("eval_policy", "greedy"),
+            row.get("ablation", "none"),
+            row.get("cross_play", "none"),
             row.get("fhat_bin"),
             str(row.get("any_token")),
         )
@@ -221,7 +230,7 @@ def _receiver_semantics_summary(rows: List[Dict]) -> List[Dict]:
     out = []
     keys = {key[:-1] for key in by_token.keys()}
     for key in sorted(keys):
-        condition, seed, episode, fhat_bin = key
+        condition, seed, episode, eval_policy, ablation, cross_play, fhat_bin = key
         p0 = by_token.get(key + ("0",), 0.0)
         p1 = by_token.get(key + ("1",), 0.0)
         out.append(
@@ -229,9 +238,184 @@ def _receiver_semantics_summary(rows: List[Dict]) -> List[Dict]:
                 "condition": condition,
                 "train_seed": int(seed),
                 "checkpoint_episode": int(episode),
+                "eval_policy": eval_policy,
+                "ablation": ablation,
+                "cross_play": cross_play,
                 "fhat_bin": fhat_bin,
                 "p_coop_any_m0": p0,
                 "p_coop_any_m1": p1,
+                "delta_m1_minus_m0": float(p1 - p0),
+            }
+        )
+    return out
+
+
+def _sign_with_eps(value: float, eps: float = 1e-8) -> int:
+    if value > eps:
+        return 1
+    if value < -eps:
+        return -1
+    return 0
+
+
+def _pairwise_alignment(signs: List[int]) -> float:
+    vals = [int(v) for v in signs]
+    if len(vals) < 2:
+        return 0.0
+    pair_scores = []
+    for idx in range(len(vals)):
+        for jdx in range(idx + 1, len(vals)):
+            pair_scores.append(float(vals[idx] * vals[jdx]))
+    return _mean(pair_scores) if len(pair_scores) > 0 else 0.0
+
+
+def _sender_alignment_summary(rows: List[Dict]) -> List[Dict]:
+    grouped: Dict[Tuple, List[Dict]] = defaultdict(list)
+    for row in rows:
+        grouped[
+            (
+                row.get("condition"),
+                _as_int(row, "train_seed", -1),
+                _as_int(row, "checkpoint_episode", 0),
+                row.get("eval_policy", "greedy"),
+                row.get("ablation", "none"),
+                row.get("cross_play", "none"),
+            )
+        ].append(row)
+
+    out = []
+    for key, grouped_rows in sorted(grouped.items()):
+        condition, seed, episode, eval_policy, ablation, cross_play = key
+        action_deltas = [float(row["delta_action1_minus_action0"]) for row in grouped_rows]
+        regime_deltas = [float(row["delta_high_minus_low_fhat"]) for row in grouped_rows]
+        action_signs = [_sign_with_eps(val) for val in action_deltas]
+        regime_signs = [_sign_with_eps(val) for val in regime_deltas]
+        out.append(
+            {
+                "condition": condition,
+                "train_seed": int(seed),
+                "checkpoint_episode": int(episode),
+                "eval_policy": eval_policy,
+                "ablation": ablation,
+                "cross_play": cross_play,
+                "n_senders": int(len(grouped_rows)),
+                "alignment_action_sign": float(_pairwise_alignment(action_signs)),
+                "alignment_regime_sign": float(_pairwise_alignment(regime_signs)),
+                "mean_abs_action_delta": float(_mean([abs(v) for v in action_deltas])),
+                "mean_abs_regime_delta": float(_mean([abs(v) for v in regime_deltas])),
+                "n_action_positive": int(sum(1 for sign in action_signs if sign > 0)),
+                "n_action_negative": int(sum(1 for sign in action_signs if sign < 0)),
+                "n_regime_positive": int(sum(1 for sign in regime_signs if sign > 0)),
+                "n_regime_negative": int(sum(1 for sign in regime_signs if sign < 0)),
+            }
+        )
+    return out
+
+
+def _receiver_by_sender_summary(trace_rows: List[Dict]) -> List[Dict]:
+    if len(trace_rows) == 0:
+        return []
+    delivered_cols = sorted(
+        {key for row in trace_rows for key in row.keys() if key.startswith("delivered_msg_")}
+    )
+    if len(delivered_cols) == 0:
+        return []
+    by_sender = defaultdict(lambda: {"n_obs": 0, "coop_sum": 0.0})
+    for row in trace_rows:
+        receiver_id = str(row.get("agent_id", ""))
+        if receiver_id == "":
+            continue
+        condition = row.get("condition")
+        seed = _as_int(row, "train_seed", -1)
+        episode = _as_int(row, "checkpoint_episode", 0)
+        eval_policy = row.get("eval_policy", "greedy")
+        ablation = row.get("ablation", "none")
+        cross_play = row.get("cross_play", "none")
+        fhat_bin = row.get("fhat_bin")
+        if not fhat_bin:
+            f_hat = _as_float(row, "f_hat")
+            if f_hat < 1.5:
+                fhat_bin = "fhat<1.5"
+            elif f_hat < 2.5:
+                fhat_bin = "1.5<=fhat<2.5"
+            elif f_hat < 3.5:
+                fhat_bin = "2.5<=fhat<3.5"
+            elif f_hat < 4.5:
+                fhat_bin = "3.5<=fhat<4.5"
+            else:
+                fhat_bin = "fhat>=4.5"
+        coop = float(_as_int(row, "action", 0))
+        for delivered_col in delivered_cols:
+            sender_id = str(delivered_col).replace("delivered_msg_", "", 1)
+            if sender_id == receiver_id:
+                continue
+            raw_token = row.get(delivered_col, "")
+            if raw_token in ("", None):
+                continue
+            token = int(float(raw_token))
+            for receiver_group in (receiver_id, "all_agents"):
+                by_sender[
+                    (
+                        condition,
+                        seed,
+                        episode,
+                        eval_policy,
+                        ablation,
+                        cross_play,
+                        receiver_group,
+                        sender_id,
+                        fhat_bin,
+                        token,
+                    )
+                ]["n_obs"] += 1
+                by_sender[
+                    (
+                        condition,
+                        seed,
+                        episode,
+                        eval_policy,
+                        ablation,
+                        cross_play,
+                        receiver_group,
+                        sender_id,
+                        fhat_bin,
+                        token,
+                    )
+                ]["coop_sum"] += coop
+
+    out = []
+    grouped_keys = {key[:-1] for key in by_sender.keys()}
+    for key in sorted(grouped_keys):
+        (
+            condition,
+            seed,
+            episode,
+            eval_policy,
+            ablation,
+            cross_play,
+            receiver_id,
+            sender_id,
+            fhat_bin,
+        ) = key
+        acc0 = by_sender.get(key + (0,), {"n_obs": 0, "coop_sum": 0.0})
+        acc1 = by_sender.get(key + (1,), {"n_obs": 0, "coop_sum": 0.0})
+        p0 = float(acc0["coop_sum"] / max(1, int(acc0["n_obs"])))
+        p1 = float(acc1["coop_sum"] / max(1, int(acc1["n_obs"])))
+        out.append(
+            {
+                "condition": condition,
+                "train_seed": int(seed),
+                "checkpoint_episode": int(episode),
+                "eval_policy": eval_policy,
+                "ablation": ablation,
+                "cross_play": cross_play,
+                "receiver_id": receiver_id,
+                "sender_id": sender_id,
+                "fhat_bin": fhat_bin,
+                "n_obs_sender_m0": int(acc0["n_obs"]),
+                "n_obs_sender_m1": int(acc1["n_obs"]),
+                "p_coop_sender_m0": p0,
+                "p_coop_sender_m1": p1,
                 "delta_m1_minus_m0": float(p1 - p0),
             }
         )
@@ -305,6 +489,7 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--suite_main_csv", type=str, default="outputs/eval/phase3/checkpoint_suite/checkpoint_suite_main.csv")
     p.add_argument("--suite_comm_csv", type=str, default="outputs/eval/phase3/checkpoint_suite/checkpoint_suite_comm.csv")
+    p.add_argument("--suite_trace_csv", type=str, default="outputs/eval/phase3/checkpoint_suite/checkpoint_suite_trace.csv")
     p.add_argument("--suite_sender_csv", type=str, default="outputs/eval/phase3/checkpoint_suite/checkpoint_suite_sender_semantics.csv")
     p.add_argument("--suite_receiver_csv", type=str, default="outputs/eval/phase3/checkpoint_suite/checkpoint_suite_receiver_semantics.csv")
     p.add_argument("--suite_posterior_csv", type=str, default="outputs/eval/phase3/checkpoint_suite/checkpoint_suite_posterior_strat.csv")
@@ -324,6 +509,7 @@ def main():
 
     suite_main_rows = _read_csv_rows(args.suite_main_csv)
     suite_comm_rows = _read_csv_rows(args.suite_comm_csv)
+    suite_trace_rows = _read_csv_rows(args.suite_trace_csv)
     suite_sender_rows = _read_csv_rows(args.suite_sender_csv)
     suite_receiver_rows = _read_csv_rows(args.suite_receiver_csv)
     suite_posterior_rows = _read_csv_rows(args.suite_posterior_csv)
@@ -335,6 +521,8 @@ def main():
     crossplay_rows = _crossplay_delta_table(crossplay_main_rows)
     sender_summary_rows = _sender_semantics_summary(suite_sender_rows)
     receiver_summary_rows = _receiver_semantics_summary(suite_receiver_rows)
+    alignment_rows = _sender_alignment_summary(sender_summary_rows)
+    receiver_by_sender_rows = _receiver_by_sender_summary(suite_trace_rows)
     comm_snapshot_rows = _comm_snapshot(suite_comm_rows)
     control_summary_rows = _control_summary(
         control_main_rows=control_main_rows,
@@ -346,6 +534,8 @@ def main():
     _write_csv(os.path.join(out_dir, "crossplay_delta_table.csv"), crossplay_rows)
     _write_csv(os.path.join(out_dir, "sender_semantics_summary.csv"), sender_summary_rows)
     _write_csv(os.path.join(out_dir, "receiver_semantics_summary.csv"), receiver_summary_rows)
+    _write_csv(os.path.join(out_dir, "sender_alignment_summary.csv"), alignment_rows)
+    _write_csv(os.path.join(out_dir, "receiver_by_sender_summary.csv"), receiver_by_sender_rows)
     _write_csv(os.path.join(out_dir, "comm_snapshot.csv"), comm_snapshot_rows)
     _write_csv(os.path.join(out_dir, "control_summary.csv"), control_summary_rows)
 
@@ -386,10 +576,33 @@ def main():
             drift_call = "joint or mixed drift remains more likely"
 
     late_sender_semantics = [
-        row for row in sender_summary_rows if int(row["checkpoint_episode"]) == 200000
+        row
+        for row in sender_summary_rows
+        if int(row["checkpoint_episode"]) == 200000
+        and row.get("ablation") == "none"
+        and row.get("cross_play") == "none"
     ]
     late_receiver_semantics = [
-        row for row in receiver_summary_rows if int(row["checkpoint_episode"]) == 200000
+        row
+        for row in receiver_summary_rows
+        if int(row["checkpoint_episode"]) == 200000
+        and row.get("ablation") == "none"
+        and row.get("cross_play") == "none"
+    ]
+    late_alignment_rows = [
+        row
+        for row in alignment_rows
+        if int(row["checkpoint_episode"]) == 200000
+        and row.get("ablation") == "none"
+        and row.get("cross_play") == "none"
+    ]
+    late_receiver_by_sender = [
+        row
+        for row in receiver_by_sender_rows
+        if int(row["checkpoint_episode"]) == 200000
+        and row.get("receiver_id") == "all_agents"
+        and row.get("ablation") == "none"
+        and row.get("cross_play") == "none"
     ]
     action_link = _mean(
         [abs(float(row["delta_action1_minus_action0"])) for row in late_sender_semantics]
@@ -400,12 +613,22 @@ def main():
     token_effect = _mean(
         [float(row["delta_m1_minus_m0"]) for row in late_receiver_semantics]
     ) if len(late_receiver_semantics) > 0 else 0.0
+    sender_specific_token_effect = _mean(
+        [abs(float(row["delta_m1_minus_m0"])) for row in late_receiver_by_sender]
+    ) if len(late_receiver_by_sender) > 0 else 0.0
+    action_alignment = _mean(
+        [float(row["alignment_action_sign"]) for row in late_alignment_rows]
+    ) if len(late_alignment_rows) > 0 else 0.0
+    regime_alignment = _mean(
+        [float(row["alignment_regime_sign"]) for row in late_alignment_rows]
+    ) if len(late_alignment_rows) > 0 else 0.0
 
     lines = [
         "# Phase 3 Messaging Diagnostics Report",
         "",
         "## Overview",
         f"- checkpoint suite rows: {len(suite_main_rows)}",
+        f"- checkpoint suite trace rows: {len(suite_trace_rows)}",
         f"- cross-play rows: {len(crossplay_main_rows)}",
         f"- posterior rows: {len(suite_posterior_rows)}",
         "",
@@ -419,12 +642,17 @@ def main():
             else "- late sender semantics lean at least as much toward regime encoding as action encoding"
         ),
         f"- average late token effect on cooperation (m1 - m0 across fhat bins): {token_effect:.3f}",
+        f"- average late sender-specific token effect magnitude: {sender_specific_token_effect:.3f}",
+        f"- late action-polarity alignment across senders: {action_alignment:.3f}",
+        f"- late regime-polarity alignment across senders: {regime_alignment:.3f}",
         "",
         "## Key Files",
         f"- intervention deltas: `{os.path.join(out_dir, 'intervention_delta_table.csv')}`",
         f"- cross-play deltas: `{os.path.join(out_dir, 'crossplay_delta_table.csv')}`",
         f"- sender semantics: `{os.path.join(out_dir, 'sender_semantics_summary.csv')}`",
         f"- receiver semantics: `{os.path.join(out_dir, 'receiver_semantics_summary.csv')}`",
+        f"- sender alignment: `{os.path.join(out_dir, 'sender_alignment_summary.csv')}`",
+        f"- receiver-by-sender: `{os.path.join(out_dir, 'receiver_by_sender_summary.csv')}`",
     ]
     if len(control_summary_rows) > 0:
         lines.extend(

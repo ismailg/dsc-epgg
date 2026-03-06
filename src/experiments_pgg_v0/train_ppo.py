@@ -64,7 +64,10 @@ class TrainConfig:
     clip_ratio: float = 0.2
     value_coeff: float = 0.5
     entropy_coeff: float = 0.01
+    entropy_schedule: str = "none"  # one of: none, linear, cosine
+    entropy_coeff_final: float = 0.001
     msg_entropy_coeff: Optional[float] = None
+    msg_entropy_coeff_final: Optional[float] = None
     max_grad_norm: float = 0.5
     ppo_epochs: int = 4
     mini_batch_size: int = 32
@@ -76,7 +79,7 @@ class TrainConfig:
     save_path: str = "outputs/ppo_agents.pt"
     init_ckpt: str = ""
     reward_scale: float = 20.0
-    lr_schedule: str = "none"  # one of: none, linear
+    lr_schedule: str = "none"  # one of: none, linear, cosine
     min_lr: float = 1e-5
     early_stop_patience: int = 0
     early_stop_min_delta: float = 1e-6
@@ -292,6 +295,25 @@ def _set_agents_lr(agents: Dict[str, PPOAgentV2], lr_value: float):
             param_group["lr"] = float(lr_value)
 
 
+def _scheduled_value(
+    initial: float,
+    final: float,
+    schedule: str,
+    progress: float,
+) -> float:
+    mode = str(schedule or "none").strip().lower()
+    if mode == "none":
+        return float(initial)
+    progress = min(1.0, max(0.0, float(progress)))
+    if mode == "linear":
+        mix = progress
+    elif mode == "cosine":
+        mix = 0.5 * (1.0 - math.cos(math.pi * progress))
+    else:
+        raise ValueError(f"unknown schedule mode: {schedule}")
+    return float(initial + (final - initial) * mix)
+
+
 def _build_env(cfg: TrainConfig):
     env_cfg = dict(
         n_agents=cfg.n_agents,
@@ -484,11 +506,41 @@ def _single_run(cfg: TrainConfig):
     best_metric = -float("inf")
     stale_epochs = 0
     for episode in range(cfg.n_episodes):
-        if cfg.lr_schedule == "linear":
-            progress = float(episode) / float(max(1, cfg.n_episodes - 1))
-            episode_lr = cfg.lr - (cfg.lr - cfg.min_lr) * progress
-            episode_lr = max(float(cfg.min_lr), float(episode_lr))
+        progress = float(episode) / float(max(1, cfg.n_episodes - 1))
+        if cfg.lr_schedule != "none":
+            episode_lr = _scheduled_value(
+                initial=float(cfg.lr),
+                final=float(cfg.min_lr),
+                schedule=str(cfg.lr_schedule),
+                progress=progress,
+            )
             _set_agents_lr(agents, episode_lr)
+        else:
+            episode_lr = float(cfg.lr)
+
+        ppo.entropy_coeff = _scheduled_value(
+            initial=float(cfg.entropy_coeff),
+            final=float(cfg.entropy_coeff_final),
+            schedule=str(cfg.entropy_schedule),
+            progress=progress,
+        )
+        msg_entropy_initial = (
+            float(cfg.msg_entropy_coeff)
+            if cfg.msg_entropy_coeff is not None
+            else float(cfg.entropy_coeff)
+        )
+        if cfg.msg_entropy_coeff_final is not None:
+            msg_entropy_final = float(cfg.msg_entropy_coeff_final)
+        elif cfg.msg_entropy_coeff is None:
+            msg_entropy_final = float(cfg.entropy_coeff_final)
+        else:
+            msg_entropy_final = msg_entropy_initial
+        ppo.msg_entropy_coeff = _scheduled_value(
+            initial=msg_entropy_initial,
+            final=msg_entropy_final,
+            schedule=str(cfg.entropy_schedule),
+            progress=progress,
+        )
 
         buffer = TrajectoryBuffer(
             agent_ids=agent_ids,
@@ -729,6 +781,9 @@ def _single_run(cfg: TrainConfig):
             "steps": buffer.t,
             "coop_rate": coop_rate,
             "avg_reward": avg_reward,
+            "lr_current": float(episode_lr),
+            "entropy_coeff_current": float(ppo.entropy_coeff),
+            "msg_entropy_coeff_current": float(ppo.msg_entropy_coeff),
             **train_metrics,
         }
         for regime in ("competitive", "mixed", "cooperative"):
@@ -1109,10 +1164,23 @@ def parse_args():
     parser.add_argument("--value_coeff", type=float, default=0.5)
     parser.add_argument("--entropy_coeff", type=float, default=0.01)
     parser.add_argument(
+        "--entropy_schedule",
+        type=str,
+        choices=["none", "linear", "cosine"],
+        default="none",
+    )
+    parser.add_argument("--entropy_coeff_final", type=float, default=0.001)
+    parser.add_argument(
         "--msg_entropy_coeff",
         type=float,
         default=None,
         help="Entropy coeff for message head. If omitted, uses --entropy_coeff for both.",
+    )
+    parser.add_argument(
+        "--msg_entropy_coeff_final",
+        type=float,
+        default=None,
+        help="Optional final entropy coeff for message head schedule.",
     )
     parser.add_argument("--max_grad_norm", type=float, default=0.5)
     parser.add_argument("--ppo_epochs", type=int, default=4)
@@ -1124,7 +1192,12 @@ def parse_args():
     parser.add_argument("--save_path", type=str, default="outputs/ppo_agents.pt")
     parser.add_argument("--init_ckpt", type=str, default="")
     parser.add_argument("--reward_scale", type=float, default=20.0)
-    parser.add_argument("--lr_schedule", type=str, choices=["none", "linear"], default="none")
+    parser.add_argument(
+        "--lr_schedule",
+        type=str,
+        choices=["none", "linear", "cosine"],
+        default="none",
+    )
     parser.add_argument("--min_lr", type=float, default=1e-5)
     parser.add_argument("--early_stop_patience", type=int, default=0)
     parser.add_argument("--early_stop_min_delta", type=float, default=1e-6)
@@ -1176,7 +1249,10 @@ def args_to_config(args) -> TrainConfig:
         clip_ratio=args.clip_ratio,
         value_coeff=args.value_coeff,
         entropy_coeff=args.entropy_coeff,
+        entropy_schedule=args.entropy_schedule,
+        entropy_coeff_final=args.entropy_coeff_final,
         msg_entropy_coeff=args.msg_entropy_coeff,
+        msg_entropy_coeff_final=args.msg_entropy_coeff_final,
         max_grad_norm=args.max_grad_norm,
         ppo_epochs=args.ppo_epochs,
         mini_batch_size=args.mini_batch_size,
@@ -1213,6 +1289,12 @@ def args_to_config(args) -> TrainConfig:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
     if cfg.reward_scale <= 0:
         raise ValueError("reward_scale must be > 0")
+    if float(cfg.entropy_coeff_final) < 0.0:
+        raise ValueError("entropy_coeff_final must be >= 0")
+    if cfg.msg_entropy_coeff is not None and float(cfg.msg_entropy_coeff) < 0.0:
+        raise ValueError("msg_entropy_coeff must be >= 0")
+    if cfg.msg_entropy_coeff_final is not None and float(cfg.msg_entropy_coeff_final) < 0.0:
+        raise ValueError("msg_entropy_coeff_final must be >= 0")
     if cfg.n_senders < 0 or cfg.n_senders > cfg.n_agents:
         raise ValueError("n_senders must be in [0, n_agents]")
     if cfg.comm_enabled and cfg.n_senders <= 0:

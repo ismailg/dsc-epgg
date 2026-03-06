@@ -114,3 +114,97 @@ def test_crossplay_runner_aggregates_matrix(tmp_path: Path):
     assert ("1", "2") in pairs
     assert ("2", "1") in pairs
     assert ("2", "2") in pairs
+
+
+def test_seed_expansion_runner_launches_trimmed_jobs(tmp_path: Path):
+    warm_ckpt = tmp_path / "fixedf_5p0_seed333.pt"
+    cfg = minimal_test_config(
+        n_agents=4,
+        n_episodes=2,
+        T=4,
+        comm_enabled=False,
+        n_senders=0,
+        seed=333,
+        save_path=str(warm_ckpt),
+        condition_name="fixedf",
+    )
+    train(cfg)
+    out_dir = tmp_path / "phase3_train"
+    env = os.environ.copy()
+    env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.experiments_pgg_v0.run_phase3_seed_expansion",
+            "--fixed_f_dir",
+            str(tmp_path),
+            "--out_dir",
+            str(out_dir),
+            "--conditions",
+            "cond1",
+            "cond2",
+            "--seeds",
+            "333",
+            "--n_episodes",
+            "2",
+            "--T",
+            "4",
+            "--log_interval",
+            "1",
+            "--regime_log_interval",
+            "1",
+            "--checkpoint_interval",
+            "1",
+            "--max_workers",
+            "1",
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        check=True,
+    )
+    assert (out_dir / "cond1_seed333.pt").exists()
+    assert (out_dir / "cond2_seed333.pt").exists()
+    assert (out_dir / "phase3_seed_expansion_manifest.json").exists()
+
+
+def test_trimmed_eval_runner_orchestrates_suite_and_crossplay(tmp_path: Path):
+    _make_checkpoint(tmp_path, "cond1", 444, comm_enabled=True)
+    _make_checkpoint(tmp_path, "cond2", 444, comm_enabled=False)
+    out_root = tmp_path / "trimmed_eval"
+    env = os.environ.copy()
+    env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.analysis.run_phase3_trimmed_eval",
+            "--checkpoint_dir",
+            str(tmp_path),
+            "--suite_out_dir",
+            str(out_root / "suite"),
+            "--crossplay_out_dir",
+            str(out_root / "crossplay"),
+            "--seeds",
+            "444",
+            "--milestones",
+            "1",
+            "2",
+            "--interventions",
+            "none",
+            "fixed0",
+            "--crossplay_sender_milestones",
+            "1",
+            "--crossplay_receiver_milestones",
+            "2",
+            "--n_eval_episodes",
+            "1",
+            "--max_workers",
+            "1",
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        check=True,
+    )
+    assert (out_root / "suite" / "checkpoint_suite_main.csv").exists()
+    assert (out_root / "crossplay" / "crossplay_matrix_main.csv").exists()
