@@ -31,6 +31,30 @@ def _fixedf_ckpt(fixed_f_dir: str, seed: int) -> str:
     return path
 
 
+def _train_ckpt(checkpoint_dir: str, condition: str, seed: int, episode: int) -> str:
+    base = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}.pt")
+    ep_path = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt")
+    if os.path.exists(ep_path):
+        return ep_path
+    if os.path.exists(base):
+        payload = None
+        try:
+            import torch  # local import to keep startup cheap
+
+            payload = torch.load(base, map_location="cpu")
+        except Exception:
+            payload = None
+        config = payload.get("config", {}) if isinstance(payload, dict) else {}
+        final_local = int(config.get("n_episodes", 0) or 0)
+        episode_offset = int(config.get("episode_offset", 0) or 0)
+        effective_final = episode_offset + final_local
+        if effective_final == int(episode):
+            return base
+    raise FileNotFoundError(
+        f"missing init checkpoint for {condition} seed={seed} episode={episode} in {checkpoint_dir}"
+    )
+
+
 def _job_name(condition: str, seed: int, msg_training_intervention: str) -> str:
     suffix = ""
     if str(msg_training_intervention).strip().lower() != "none":
@@ -43,7 +67,15 @@ def _build_job(args, condition: str, seed: int) -> Job:
     save_path = os.path.join(args.out_dir, f"{name}.pt")
     metrics_path = os.path.join(args.out_dir, "metrics", f"{name}.jsonl")
     log_path = os.path.join(args.out_dir, "logs", f"{name}.log")
-    init_ckpt = _fixedf_ckpt(args.fixed_f_dir, seed)
+    if str(args.init_checkpoint_dir or "").strip() != "":
+        init_ckpt = _train_ckpt(
+            checkpoint_dir=str(args.init_checkpoint_dir),
+            condition=str(condition),
+            seed=int(seed),
+            episode=int(args.init_episode),
+        )
+    else:
+        init_ckpt = _fixedf_ckpt(args.fixed_f_dir, seed)
 
     cmd = [
         sys.executable,
@@ -104,6 +136,10 @@ def _build_job(args, condition: str, seed: int) -> Job:
             metrics_path,
             "--condition_name",
             str(condition),
+            "--episode_offset",
+            str(int(args.episode_offset)),
+            "--schedule_total_episodes",
+            str(int(args.schedule_total_episodes)),
         ]
     )
     if args.msg_entropy_coeff is not None:
@@ -177,6 +213,8 @@ def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--out_dir", type=str, default="outputs/train/phase3_trimmed")
     p.add_argument("--fixed_f_dir", type=str, default="outputs/train/fixed_f_grid")
+    p.add_argument("--init_checkpoint_dir", type=str, default="")
+    p.add_argument("--init_episode", type=int, default=0)
     p.add_argument("--conditions", nargs="*", type=str, default=["cond1", "cond2"])
     p.add_argument("--seeds", nargs="*", type=int, default=[101, 202, 303, 404, 505])
     p.add_argument("--n_agents", type=int, default=4)
@@ -203,10 +241,12 @@ def parse_args():
     p.add_argument("--log_interval", type=int, default=1000)
     p.add_argument("--regime_log_interval", type=int, default=5000)
     p.add_argument("--checkpoint_interval", type=int, default=50000)
+    p.add_argument("--episode_offset", type=int, default=0)
+    p.add_argument("--schedule_total_episodes", type=int, default=0)
     p.add_argument(
         "--msg_training_intervention",
         type=str,
-        choices=["none", "uniform", "fixed0", "fixed1"],
+        choices=["none", "uniform", "public_random", "fixed0", "fixed1"],
         default="none",
     )
     p.add_argument("--max_workers", type=int, default=2)

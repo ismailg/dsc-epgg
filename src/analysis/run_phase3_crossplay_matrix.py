@@ -15,14 +15,25 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def _checkpoint_path(checkpoint_dir: str, condition: str, seed: int, episode: int) -> str:
     base = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}.pt")
-    if int(episode) == 200000 and os.path.exists(base):
-        return base
     ep_path = os.path.join(
         checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt"
     )
     if os.path.exists(ep_path):
         return ep_path
     if os.path.exists(base):
+        payload = None
+        try:
+            import torch  # local import to keep startup cheap when not needed
+
+            payload = torch.load(base, map_location="cpu")
+        except Exception:
+            payload = None
+        config = payload.get("config", {}) if isinstance(payload, dict) else {}
+        final_local = int(config.get("n_episodes", 0) or 0)
+        episode_offset = int(config.get("episode_offset", 0) or 0)
+        effective_final = episode_offset + final_local
+        if int(episode) == effective_final or (effective_final <= 0 and int(episode) == 200000):
+            return base
         return base
     raise FileNotFoundError(
         f"checkpoint missing for {condition} seed={seed} episode={episode}"

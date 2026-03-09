@@ -168,6 +168,55 @@ def test_seed_expansion_runner_launches_trimmed_jobs(tmp_path: Path):
     assert (out_dir / "phase3_seed_expansion_manifest.json").exists()
 
 
+def test_seed_expansion_runner_supports_checkpoint_continuation_and_public_random(tmp_path: Path):
+    base_dir = tmp_path / "base"
+    base_dir.mkdir(parents=True, exist_ok=True)
+    _make_checkpoint(base_dir, "cond1", 555, comm_enabled=True)
+    out_dir = tmp_path / "phase3_train_ext"
+    env = os.environ.copy()
+    env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.experiments_pgg_v0.run_phase3_seed_expansion",
+            "--out_dir",
+            str(out_dir),
+            "--init_checkpoint_dir",
+            str(base_dir),
+            "--init_episode",
+            "3",
+            "--episode_offset",
+            "3",
+            "--schedule_total_episodes",
+            "5",
+            "--conditions",
+            "cond1",
+            "--seeds",
+            "555",
+            "--n_episodes",
+            "2",
+            "--T",
+            "4",
+            "--msg_training_intervention",
+            "public_random",
+            "--log_interval",
+            "1",
+            "--regime_log_interval",
+            "1",
+            "--checkpoint_interval",
+            "1",
+            "--max_workers",
+            "1",
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        check=True,
+    )
+    assert (out_dir / "cond1_seed555_public_random.pt").exists()
+    assert (out_dir / "cond1_seed555_public_random_ep4.pt").exists()
+
+
 def test_trimmed_eval_runner_orchestrates_suite_and_crossplay(tmp_path: Path):
     _make_checkpoint(tmp_path, "cond1", 444, comm_enabled=True)
     _make_checkpoint(tmp_path, "cond2", 444, comm_enabled=False)

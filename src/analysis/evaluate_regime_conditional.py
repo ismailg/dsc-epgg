@@ -249,9 +249,17 @@ def _apply_message_intervention(
             sender_id: int(np.random.randint(0, vocab_size))
             for sender_id in sender_ids
         }, False
+    if mode == "permute_slots":
+        if len(sender_ids) <= 1:
+            return out, False
+        values = [int(out[sender_id]) for sender_id in sender_ids]
+        perm = np.random.permutation(len(sender_ids))
+        return {
+            sender_ids[idx]: int(values[int(perm[idx])]) for idx in range(len(sender_ids))
+        }, False
     raise ValueError(
         "unknown msg_intervention="
-        f"{intervention!r}; expected one of: none,marginal,zeros,fixed0,fixed1,flip,uniform"
+        f"{intervention!r}; expected one of: none,marginal,zeros,fixed0,fixed1,flip,uniform,permute_slots"
     )
 
 
@@ -1494,7 +1502,7 @@ def parse_args():
         "--msg_intervention",
         type=str,
         default="none",
-        choices=["none", "marginal", "zeros", "fixed0", "fixed1", "flip", "uniform"],
+        choices=["none", "marginal", "zeros", "fixed0", "fixed1", "flip", "uniform", "permute_slots"],
     )
     p.add_argument("--mi_null_perms", type=int, default=200)
     p.add_argument("--mi_alpha", type=float, default=0.05)

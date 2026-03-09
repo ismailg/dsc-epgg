@@ -43,3 +43,38 @@ def test_uniform_training_intervention_updates_marginals_with_delivered_tokens(
     assert set(recorded) == {1}
     payload = torch.load(ckpt, map_location="cpu")
     assert payload["config"]["msg_training_intervention"] == "uniform"
+
+
+def test_public_random_training_intervention_shares_one_token_across_senders():
+    delivered = {"agent_0": 0, "agent_1": 1, "agent_2": 0, "agent_3": 1}
+    out = train_ppo._apply_training_message_intervention(
+        intervention="public_random",
+        delivered=delivered,
+        vocab_size=2,
+    )
+    assert set(out.keys()) == set(delivered.keys())
+    assert len(set(out.values())) == 1
+
+
+def test_episode_offset_drives_absolute_checkpoint_numbering(tmp_path: Path):
+    ckpt = tmp_path / "cond2_seed888.pt"
+    cfg = minimal_test_config(
+        n_agents=4,
+        n_episodes=3,
+        T=4,
+        comm_enabled=False,
+        n_senders=0,
+        seed=888,
+        save_path=str(ckpt),
+        condition_name="cond2",
+        checkpoint_interval=1,
+        episode_offset=10,
+        schedule_total_episodes=13,
+    )
+    train(cfg)
+
+    assert (tmp_path / "cond2_seed888_ep11.pt").exists()
+    assert (tmp_path / "cond2_seed888_ep12.pt").exists()
+    payload = torch.load(ckpt, map_location="cpu")
+    assert payload["config"]["episode_offset"] == 10
+    assert payload["config"]["schedule_total_episodes"] == 13

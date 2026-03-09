@@ -55,6 +55,8 @@ class TrainConfig:
     vocab_size: int = 2
     msg_dropout: float = 0.1
     msg_training_intervention: str = "none"
+    episode_offset: int = 0
+    schedule_total_episodes: int = 0
 
     hidden_size: int = 64
     value_time_feature: bool = True
@@ -277,6 +279,9 @@ def _apply_training_message_intervention(
             sender_id: int(np.random.randint(0, vocab_size))
             for sender_id in out.keys()
         }
+    if mode == "public_random":
+        shared = int(np.random.randint(0, vocab_size))
+        return {sender_id: shared for sender_id in out.keys()}
     if mode == "fixed0":
         return {sender_id: 0 for sender_id in out.keys()}
     if mode == "fixed1":
@@ -285,7 +290,7 @@ def _apply_training_message_intervention(
         return {sender_id: 1 for sender_id in out.keys()}
     raise ValueError(
         "unknown msg_training_intervention="
-        f"{intervention!r}; expected one of: none,uniform,fixed0,fixed1"
+        f"{intervention!r}; expected one of: none,uniform,public_random,fixed0,fixed1"
     )
 
 
@@ -506,7 +511,12 @@ def _single_run(cfg: TrainConfig):
     best_metric = -float("inf")
     stale_epochs = 0
     for episode in range(cfg.n_episodes):
-        progress = float(episode) / float(max(1, cfg.n_episodes - 1))
+        abs_episode0 = int(cfg.episode_offset) + int(episode)
+        abs_episode1 = int(abs_episode0) + 1
+        total_schedule_episodes = int(cfg.schedule_total_episodes)
+        if total_schedule_episodes <= 0:
+            total_schedule_episodes = int(cfg.episode_offset) + int(cfg.n_episodes)
+        progress = float(abs_episode0) / float(max(1, total_schedule_episodes - 1))
         if cfg.lr_schedule != "none":
             episode_lr = _scheduled_value(
                 initial=float(cfg.lr),
@@ -777,7 +787,8 @@ def _single_run(cfg: TrainConfig):
                         window_comm_counts[sender_id]["msg_f"][msg, f_idx] += 1.0
                         window_comm_counts[sender_id]["msg_action"][msg, act] += 1.0
         episode_metrics = {
-            "episode": episode,
+            "episode": int(abs_episode1),
+            "episode_local": int(episode + 1),
             "steps": buffer.t,
             "coop_rate": coop_rate,
             "avg_reward": avg_reward,
@@ -793,11 +804,11 @@ def _single_run(cfg: TrainConfig):
             episode_metrics[f"regime_{regime}_reward"] = float(view["avg_reward"])
         metrics_over_time.append(episode_metrics)
         if wandb_run is not None:
-            wandb_run.log(episode_metrics, step=episode)
+            wandb_run.log(episode_metrics, step=abs_episode1)
 
         if (episode + 1) % max(1, cfg.log_interval) == 0:
             print(
-                f"[episode {episode + 1:04d}] "
+                f"[episode {abs_episode1:04d}] "
                 f"coop={coop_rate:.3f} avg_reward={avg_reward:.3f} "
                 f"loss={train_metrics['loss_total']:.4f}"
             )
@@ -812,7 +823,7 @@ def _single_run(cfg: TrainConfig):
                 _append_jsonl(
                     cfg.metrics_jsonl_path,
                     {
-                        "episode": int(episode + 1),
+                        "episode": int(abs_episode1),
                         "seed": int(cfg.seed),
                         "condition": str(cfg.condition_name),
                         "scope": "regime",
@@ -827,7 +838,7 @@ def _single_run(cfg: TrainConfig):
                 _append_jsonl(
                     cfg.metrics_jsonl_path,
                     {
-                        "episode": int(episode + 1),
+                        "episode": int(abs_episode1),
                         "seed": int(cfg.seed),
                         "condition": str(cfg.condition_name),
                         "scope": "regime",
@@ -844,7 +855,7 @@ def _single_run(cfg: TrainConfig):
                 _append_jsonl(
                     cfg.metrics_jsonl_path,
                     {
-                        "episode": int(episode + 1),
+                        "episode": int(abs_episode1),
                         "seed": int(cfg.seed),
                         "condition": str(cfg.condition_name),
                         "scope": "f_value",
@@ -860,7 +871,7 @@ def _single_run(cfg: TrainConfig):
                 _append_jsonl(
                     cfg.metrics_jsonl_path,
                     {
-                        "episode": int(episode + 1),
+                        "episode": int(abs_episode1),
                         "seed": int(cfg.seed),
                         "condition": str(cfg.condition_name),
                         "scope": "f_value",
@@ -898,7 +909,7 @@ def _single_run(cfg: TrainConfig):
                     _append_jsonl(
                         cfg.metrics_jsonl_path,
                         {
-                            "episode": int(episode + 1),
+                            "episode": int(abs_episode1),
                             "seed": int(cfg.seed),
                             "condition": str(cfg.condition_name),
                             "scope": "comm",
@@ -920,7 +931,7 @@ def _single_run(cfg: TrainConfig):
                     _append_jsonl(
                         cfg.metrics_jsonl_path,
                         {
-                            "episode": int(episode + 1),
+                            "episode": int(abs_episode1),
                             "seed": int(cfg.seed),
                             "condition": str(cfg.condition_name),
                             "scope": "comm",
@@ -969,7 +980,7 @@ def _single_run(cfg: TrainConfig):
                 _append_jsonl(
                     cfg.metrics_jsonl_path,
                     {
-                        "episode": int(episode + 1),
+                        "episode": int(abs_episode1),
                         "seed": int(cfg.seed),
                         "condition": str(cfg.condition_name),
                         "scope": "comm",
@@ -991,7 +1002,7 @@ def _single_run(cfg: TrainConfig):
                 _append_jsonl(
                     cfg.metrics_jsonl_path,
                     {
-                        "episode": int(episode + 1),
+                        "episode": int(abs_episode1),
                         "seed": int(cfg.seed),
                         "condition": str(cfg.condition_name),
                         "scope": "comm",
@@ -1018,7 +1029,7 @@ def _single_run(cfg: TrainConfig):
                         _append_jsonl(
                             cfg.metrics_jsonl_path,
                             {
-                                "episode": int(episode + 1),
+                                "episode": int(abs_episode1),
                                 "seed": int(cfg.seed),
                                 "condition": str(cfg.condition_name),
                                 "scope": "comm",
@@ -1034,7 +1045,7 @@ def _single_run(cfg: TrainConfig):
                         _append_jsonl(
                             cfg.metrics_jsonl_path,
                             {
-                                "episode": int(episode + 1),
+                                "episode": int(abs_episode1),
                                 "seed": int(cfg.seed),
                                 "condition": str(cfg.condition_name),
                                 "scope": "comm",
@@ -1048,7 +1059,7 @@ def _single_run(cfg: TrainConfig):
                         )
 
             print(
-                f"[regime @ episode {episode + 1:04d}] " + " ".join(summary_chunks)
+                f"[regime @ episode {abs_episode1:04d}] " + " ".join(summary_chunks)
             )
             window_regime_acc = {
                 "competitive": _bucket(),
@@ -1063,10 +1074,10 @@ def _single_run(cfg: TrainConfig):
 
         if (
             cfg.checkpoint_interval > 0
-            and (episode + 1) % int(cfg.checkpoint_interval) == 0
+            and abs_episode1 % int(cfg.checkpoint_interval) == 0
             and (episode + 1) < cfg.n_episodes
         ):
-            ckpt_path = _checkpoint_with_episode(cfg.save_path, episode + 1)
+            ckpt_path = _checkpoint_with_episode(cfg.save_path, abs_episode1)
             ckpt_cfg = TrainConfig(**cfg.__dict__)
             ckpt_cfg.save_path = ckpt_path
             _save_agents(ckpt_path, agents, ckpt_cfg)
@@ -1082,7 +1093,7 @@ def _single_run(cfg: TrainConfig):
                 stale_epochs += 1
                 if stale_epochs >= cfg.early_stop_patience:
                     print(
-                        f"[early-stop] stopping at episode {episode + 1} "
+                        f"[early-stop] stopping at episode {abs_episode1} "
                         f"(best_avg_reward={best_metric:.4f})"
                     )
                     break
@@ -1153,8 +1164,10 @@ def parse_args():
         "--msg_training_intervention",
         type=str,
         default="none",
-        choices=["none", "uniform", "fixed0", "fixed1"],
+        choices=["none", "uniform", "public_random", "fixed0", "fixed1"],
     )
+    parser.add_argument("--episode_offset", type=int, default=0)
+    parser.add_argument("--schedule_total_episodes", type=int, default=0)
     parser.add_argument("--hidden_size", type=int, default=64)
     parser.add_argument("--disable_value_time_feature", action="store_true")
     parser.add_argument("--lr", type=float, default=3e-4)
@@ -1241,6 +1254,8 @@ def args_to_config(args) -> TrainConfig:
         vocab_size=args.vocab_size,
         msg_dropout=args.msg_dropout,
         msg_training_intervention=args.msg_training_intervention,
+        episode_offset=args.episode_offset,
+        schedule_total_episodes=args.schedule_total_episodes,
         hidden_size=args.hidden_size,
         value_time_feature=not bool(args.disable_value_time_feature),
         lr=args.lr,
@@ -1309,6 +1324,16 @@ def args_to_config(args) -> TrainConfig:
         )
     if str(cfg.msg_training_intervention) == "fixed1" and int(cfg.vocab_size) < 2:
         raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
+    if int(cfg.episode_offset) < 0:
+        raise ValueError("episode_offset must be >= 0")
+    if int(cfg.schedule_total_episodes) < 0:
+        raise ValueError("schedule_total_episodes must be >= 0")
+    if int(cfg.schedule_total_episodes) > 0 and int(cfg.schedule_total_episodes) < (
+        int(cfg.episode_offset) + int(cfg.n_episodes)
+    ):
+        raise ValueError(
+            "schedule_total_episodes must be >= episode_offset + n_episodes"
+        )
     if cfg.regime_log_interval <= 0:
         raise ValueError("regime_log_interval must be > 0")
     if cfg.checkpoint_interval < 0:

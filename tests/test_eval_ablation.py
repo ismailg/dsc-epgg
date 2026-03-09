@@ -57,6 +57,25 @@ def test_eval_outputs_ablation_and_comm_rows(tmp_path):
     assert any(r.get("summary") == "p_coop_given_any_token_fhat" for r in receiver_ablate)
 
 
+def test_eval_supports_permute_slots_ablation(tmp_path):
+    ckpt = _make_comm_checkpoint(tmp_path)
+    rows, comm_rows, _posterior, trace_rows, _sender_rows, receiver_rows = _eval_checkpoint(
+        checkpoint_path=str(ckpt),
+        n_eval_episodes=2,
+        eval_seed=4321,
+        greedy=True,
+        msg_intervention="permute_slots",
+        mi_null_perms=20,
+        mi_alpha=0.05,
+        collect_semantics=True,
+    )
+    assert len(rows) > 0
+    assert len(comm_rows) > 0
+    assert len(trace_rows) > 0
+    assert all(r["ablation"] == "permute_slots" for r in rows)
+    assert any(r.get("summary") == "p_coop_given_sender_token_fhat" for r in receiver_rows)
+
+
 def test_condition_summary_separates_ablation():
     rows = [
         {

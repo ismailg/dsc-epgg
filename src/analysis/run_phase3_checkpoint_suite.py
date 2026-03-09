@@ -15,17 +15,23 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 def _checkpoint_path(checkpoint_dir: str, condition: str, seed: int, episode: int) -> str:
     base = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}.pt")
-    if int(episode) == 200000 and os.path.exists(base):
-        return base
+    if os.path.exists(base):
+        payload = None
+        try:
+            import torch  # local import to keep startup cheap when not needed
+
+            payload = torch.load(base, map_location="cpu")
+        except Exception:
+            payload = None
+        config = payload.get("config", {}) if isinstance(payload, dict) else {}
+        final_episodes = int(config.get("n_episodes", 0) or 0)
+        if int(episode) == 200000 or (final_episodes > 0 and int(episode) == final_episodes):
+            return base
     ep_path = os.path.join(
         checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt"
     )
     if os.path.exists(ep_path):
         return ep_path
-    if os.path.exists(base) and int(episode) != 200000:
-        raise FileNotFoundError(
-            f"checkpoint missing for {condition} seed={seed} episode={episode}: {ep_path}"
-        )
     if os.path.exists(base):
         return base
     raise FileNotFoundError(
@@ -256,25 +262,26 @@ def main():
                         "eval_seed": int(args.eval_seed),
                     }
                 )
-            baseline_ckpt = _checkpoint_path(
-                checkpoint_dir=args.checkpoint_dir,
-                condition=args.baseline_condition,
-                seed=int(seed),
-                episode=int(episode),
-            )
-            tasks.append(
-                {
-                    "name": _task_name(args.baseline_condition, seed, episode, "none"),
-                    "suite_kind": "baseline",
-                    "checkpoint": baseline_ckpt,
-                    "episode": int(episode),
-                    "intervention": "none",
-                    "posterior_strat": True,
-                    "collect_semantics": False,
-                    "n_eval_episodes": int(args.n_eval_episodes),
-                    "eval_seed": int(args.eval_seed),
-                }
-            )
+            if str(args.baseline_condition or "").strip() != "":
+                baseline_ckpt = _checkpoint_path(
+                    checkpoint_dir=args.checkpoint_dir,
+                    condition=args.baseline_condition,
+                    seed=int(seed),
+                    episode=int(episode),
+                )
+                tasks.append(
+                    {
+                        "name": _task_name(args.baseline_condition, seed, episode, "none"),
+                        "suite_kind": "baseline",
+                        "checkpoint": baseline_ckpt,
+                        "episode": int(episode),
+                        "intervention": "none",
+                        "posterior_strat": True,
+                        "collect_semantics": False,
+                        "n_eval_episodes": int(args.n_eval_episodes),
+                        "eval_seed": int(args.eval_seed),
+                    }
+                )
 
     results = []
     with ThreadPoolExecutor(max_workers=max(1, int(args.max_workers))) as ex:

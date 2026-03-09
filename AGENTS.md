@@ -44,6 +44,8 @@ These notes are additive to the parent [AGENTS.md](/Users/mbp17/POSTDOC/NPS26/AG
 
 - Canonical unattended script:
   - [scripts/run_phase3_annealed_pipeline.sh](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/scripts/run_phase3_annealed_pipeline.sh)
+- High-information follow-up script:
+  - [scripts/run_phase3_high_info_suite.sh](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/scripts/run_phase3_high_info_suite.sh)
 - It runs, in order:
   1. seed-101 annealed pilot train
   2. seed-101 trimmed eval/report
@@ -51,6 +53,36 @@ These notes are additive to the parent [AGENTS.md](/Users/mbp17/POSTDOC/NPS26/AG
   4. remaining seed training
   5. full trimmed eval/report
   6. full rescue/fragmentation analysis
+
+## Continuation runs
+
+- `train_ppo.py` now supports continuation-aware scheduling via:
+  - `--episode_offset`
+  - `--schedule_total_episodes`
+- Use them whenever extending a prior checkpoint horizon. Otherwise:
+  - entropy/LR schedules restart from zero
+  - checkpoint filenames are misaligned with effective training episode
+  - downstream `50k -> 150k` analysis becomes scientifically invalid
+- For the current high-information extension, the correct pattern is:
+  - init from `50k`
+  - `episode_offset=50000`
+  - `schedule_total_episodes=150000`
+  - `checkpoint_interval=50000`
+  - resulting checkpoints:
+    - `_ep100000.pt`
+    - final base `.pt` representing `150000`
+
+## Channel controls
+
+- Training-time communication controls now include:
+  - `fixed0` for always-zero received channel
+  - `uniform` for independent random bits per sender slot
+  - `public_random` for a shared random bit broadcast into all sender slots
+- Evaluation-time ablations now include:
+  - `permute_slots` to randomize sender-slot identity while preserving the delivered bits
+- `permute_slots` is the direct test for sender-conditioned decoding:
+  - if performance drops, receivers are using sender identity
+  - if aggregate token effects stay small while sender-slot effects remain large, prefer the fragmentation interpretation over “messages died”
 
 ## Overlapping seed expansion
 

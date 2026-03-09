@@ -39,3 +39,30 @@ def test_train_logs_entropy_schedule_progress(tmp_path: Path):
     assert metrics[-1]["msg_entropy_coeff_current"] == pytest.approx(0.01)
     assert metrics[0]["lr_current"] == cfg.lr
     assert metrics[-1]["lr_current"] == pytest.approx(cfg.min_lr)
+
+
+def test_schedule_progress_respects_episode_offset(tmp_path: Path):
+    ckpt = tmp_path / "sched_seed654.pt"
+    cfg = minimal_test_config(
+        n_agents=4,
+        n_episodes=2,
+        T=4,
+        comm_enabled=False,
+        n_senders=0,
+        seed=654,
+        save_path=str(ckpt),
+        condition_name="cond2",
+        entropy_coeff=0.02,
+        entropy_schedule="linear",
+        entropy_coeff_final=0.0,
+        lr_schedule="linear",
+        min_lr=1e-5,
+        episode_offset=2,
+        schedule_total_episodes=4,
+    )
+    metrics = train(cfg)
+    assert len(metrics) == 2
+    assert metrics[0]["episode"] == 3
+    assert metrics[0]["entropy_coeff_current"] == pytest.approx(0.02 / 3.0)
+    assert metrics[-1]["episode"] == 4
+    assert metrics[-1]["entropy_coeff_current"] == 0.0
