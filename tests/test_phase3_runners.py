@@ -4,6 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from src.analysis.summarize_phase3_channel_controls import _collect_mode_rows
 from src.experiments_pgg_v0.train_ppo import minimal_test_config, train
 
 
@@ -257,3 +258,43 @@ def test_trimmed_eval_runner_orchestrates_suite_and_crossplay(tmp_path: Path):
     )
     assert (out_root / "suite" / "checkpoint_suite_main.csv").exists()
     assert (out_root / "crossplay" / "crossplay_matrix_main.csv").exists()
+
+
+def test_channel_control_summary_recovers_condition_seed_from_checkpoint(tmp_path: Path):
+    suite_csv = tmp_path / "suite.csv"
+    with open(suite_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(
+            f,
+            fieldnames=[
+                "checkpoint",
+                "condition",
+                "train_seed",
+                "scope",
+                "eval_policy",
+                "ablation",
+                "cross_play",
+                "key",
+                "checkpoint_episode",
+                "coop_rate",
+                "avg_welfare",
+            ],
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "checkpoint": "outputs/train/phase3_channel_controls_50k/fixed0/cond1_seed101_fixed0_ep25000.pt",
+                "condition": "unknown",
+                "train_seed": "-1",
+                "scope": "f_value",
+                "eval_policy": "greedy",
+                "ablation": "none",
+                "cross_play": "none",
+                "key": "3.500",
+                "checkpoint_episode": "25000",
+                "coop_rate": "0.5",
+                "avg_welfare": "10.0",
+            }
+        )
+    rows = _collect_mode_rows("always_zero", str(suite_csv))
+    assert len(rows) == 1
+    assert rows[0]["train_seed"] == 101

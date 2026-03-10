@@ -1,6 +1,10 @@
 from pathlib import Path
 
-from src.analysis.evaluate_regime_conditional import _condition_summary, _eval_checkpoint
+from src.analysis.evaluate_regime_conditional import (
+    _condition_seed_from_path,
+    _condition_summary,
+    _eval_checkpoint,
+)
 from src.experiments_pgg_v0.train_ppo import minimal_test_config, train
 
 
@@ -104,3 +108,9 @@ def test_condition_summary_separates_ablation():
     keys = {(r["eval_policy"], r["ablation"]) for r in out}
     assert ("greedy", "none") in keys
     assert ("greedy", "marginal") in keys
+
+
+def test_condition_seed_parser_accepts_control_suffixes():
+    assert _condition_seed_from_path("cond1_seed101_fixed0_ep25000.pt") == ("cond1", 101)
+    assert _condition_seed_from_path("cond1_seed202_public_random.pt") == ("cond1", 202)
+    assert _condition_seed_from_path("cond2_seed303_uniform_ep50000.pt") == ("cond2", 303)

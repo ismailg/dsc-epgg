@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import json
 import os
 import subprocess
@@ -14,27 +15,38 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def _checkpoint_path(checkpoint_dir: str, condition: str, seed: int, episode: int) -> str:
-    base = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}.pt")
-    ep_path = os.path.join(
-        checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt"
-    )
-    if os.path.exists(ep_path):
-        return ep_path
-    if os.path.exists(base):
-        payload = None
-        try:
-            import torch  # local import to keep startup cheap when not needed
+    prefix = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}")
+    exact_ep = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt")
+    ep_candidates = sorted(glob.glob(f"{prefix}*_ep{int(episode)}.pt"))
+    if os.path.exists(exact_ep):
+        return exact_ep
+    if len(ep_candidates) > 0:
+        return ep_candidates[0]
 
-            payload = torch.load(base, map_location="cpu")
-        except Exception:
-            payload = None
+    base_candidates = sorted(
+        path
+        for path in glob.glob(f"{prefix}*.pt")
+        if f"_ep{int(episode)}.pt" not in path
+    )
+    try:
+        import torch  # local import to keep startup cheap when not needed
+    except Exception:
+        torch = None  # type: ignore
+    for base in base_candidates:
+        payload = None
+        if torch is not None:
+            try:
+                payload = torch.load(base, map_location="cpu")
+            except Exception:
+                payload = None
         config = payload.get("config", {}) if isinstance(payload, dict) else {}
         final_local = int(config.get("n_episodes", 0) or 0)
         episode_offset = int(config.get("episode_offset", 0) or 0)
         effective_final = episode_offset + final_local
         if int(episode) == effective_final or (effective_final <= 0 and int(episode) == 200000):
             return base
-        return base
+    if len(base_candidates) == 1:
+        return base_candidates[0]
     raise FileNotFoundError(
         f"checkpoint missing for {condition} seed={seed} episode={episode}"
     )

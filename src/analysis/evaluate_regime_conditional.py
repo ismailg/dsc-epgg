@@ -44,7 +44,10 @@ def _as_float(x) -> float:
 
 def _condition_seed_from_path(path: str) -> Tuple[str, int]:
     name = os.path.basename(path)
-    m = re.search(r"(cond[0-9]+)_seed([0-9]+)(?:_ep[0-9]+)?\.pt$", name)
+    # Allow extra control-mode suffixes such as:
+    #   cond1_seed101_fixed0_ep25000.pt
+    #   cond1_seed101_public_random.pt
+    m = re.search(r"(cond[0-9]+)_seed([0-9]+)", name)
     if not m:
         return "unknown", -1
     return m.group(1), int(m.group(2))

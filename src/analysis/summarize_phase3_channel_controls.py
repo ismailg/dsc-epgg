@@ -3,7 +3,10 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 from typing import Dict, List
+
+from src.analysis.condition_labels import condition_alias, condition_display
 
 
 def _read_csv_rows(path: str) -> List[Dict]:
@@ -46,10 +49,24 @@ def _as_int(row: Dict, key: str, default: int = 0) -> int:
     return int(float(value))
 
 
+def _infer_condition_seed(checkpoint: str) -> tuple[str, int]:
+    name = os.path.basename(str(checkpoint or ""))
+    m = re.search(r"(cond[0-9]+)_seed([0-9]+)", name)
+    if not m:
+        return "unknown", -1
+    return m.group(1), int(m.group(2))
+
+
 def _collect_mode_rows(mode: str, suite_csv: str) -> List[Dict]:
     out = []
     for row in _read_csv_rows(suite_csv):
-        if row.get("condition") != "cond1":
+        cond = row.get("condition", "")
+        train_seed = _as_int(row, "train_seed", -1)
+        if cond in ("", "unknown") or train_seed < 0:
+            cond, inferred_seed = _infer_condition_seed(row.get("checkpoint", ""))
+            if train_seed < 0:
+                train_seed = int(inferred_seed)
+        if cond != "cond1":
             continue
         if row.get("scope") != "f_value":
             continue
@@ -64,7 +81,10 @@ def _collect_mode_rows(mode: str, suite_csv: str) -> List[Dict]:
         out.append(
             {
                 "mode": mode,
-                "train_seed": _as_int(row, "train_seed", -1),
+                "condition": cond,
+                "condition_alias": condition_alias(cond),
+                "condition_display": condition_display(cond),
+                "train_seed": int(train_seed),
                 "checkpoint_episode": _as_int(row, "checkpoint_episode", 0),
                 "f_value": row.get("key"),
                 "coop_rate": _as_float(row, "coop_rate"),
@@ -82,14 +102,24 @@ def _mean(values: List[float]) -> float:
 def _summarize(rows: List[Dict]) -> List[Dict]:
     grouped = {}
     for row in rows:
-        key = (row["mode"], row["checkpoint_episode"], row["f_value"])
+        key = (
+            row["mode"],
+            row.get("condition", ""),
+            row.get("condition_alias", ""),
+            row.get("condition_display", ""),
+            row["checkpoint_episode"],
+            row["f_value"],
+        )
         grouped.setdefault(key, []).append(row)
 
     out = []
-    for (mode, episode, f_value), cur in sorted(grouped.items()):
+    for (mode, condition, condition_alias_value, condition_display_value, episode, f_value), cur in sorted(grouped.items()):
         out.append(
             {
                 "mode": mode,
+                "condition": condition,
+                "condition_alias": condition_alias_value,
+                "condition_display": condition_display_value,
                 "checkpoint_episode": int(episode),
                 "f_value": f_value,
                 "n_seeds": int(len(cur)),

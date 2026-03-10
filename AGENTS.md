@@ -46,6 +46,8 @@ These notes are additive to the parent [AGENTS.md](/Users/mbp17/POSTDOC/NPS26/AG
   - [scripts/run_phase3_annealed_pipeline.sh](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/scripts/run_phase3_annealed_pipeline.sh)
 - High-information follow-up script:
   - [scripts/run_phase3_high_info_suite.sh](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/scripts/run_phase3_high_info_suite.sh)
+- High-information watchdog:
+  - [scripts/run_phase3_high_info_watchdog.sh](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/scripts/run_phase3_high_info_watchdog.sh)
 - It runs, in order:
   1. seed-101 annealed pilot train
   2. seed-101 trimmed eval/report
@@ -83,6 +85,17 @@ These notes are additive to the parent [AGENTS.md](/Users/mbp17/POSTDOC/NPS26/AG
 - `permute_slots` is the direct test for sender-conditioned decoding:
   - if performance drops, receivers are using sender identity
   - if aggregate token effects stay small while sender-slot effects remain large, prefer the fragmentation interpretation over “messages died”
+
+## Unattended completion
+
+- For multi-stage local runs that must survive intermediate script failures, prefer:
+  - `run_phase3_high_info_suite.sh` as the worker
+  - `run_phase3_high_info_watchdog.sh` as the supervisor
+- The watchdog exits only when the final comparison artifact exists:
+  - `outputs/eval/phase3_compare/annealed_vs_unannealed_trajectory_mean.csv`
+- This setup is intentionally idempotent:
+  - training runners use `--skip_existing`
+  - eval/report stages can be safely rerun
 
 ## Overlapping seed expansion
 

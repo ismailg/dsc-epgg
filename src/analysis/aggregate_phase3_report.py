@@ -7,6 +7,8 @@ import re
 from collections import defaultdict
 from typing import Dict, List, Tuple
 
+from src.analysis.condition_labels import condition_alias, condition_display
+
 
 def _read_csv_rows(path: str) -> List[Dict]:
     if path == "" or not os.path.exists(path):
@@ -104,6 +106,8 @@ def _intervention_delta_table(main_rows: List[Dict]) -> List[Dict]:
                     out.append(
                         {
                             "condition": "cond1",
+                            "condition_alias": condition_alias("cond1"),
+                            "condition_display": condition_display("cond1"),
                             "train_seed": int(seed),
                             "checkpoint_episode": int(episode),
                             "f_value": f_key,
@@ -151,6 +155,8 @@ def _crossplay_delta_table(rows: List[Dict]) -> List[Dict]:
         out.append(
             {
                 "condition": row.get("condition"),
+                "condition_alias": condition_alias(row.get("condition")),
+                "condition_display": condition_display(row.get("condition")),
                 "train_seed": _as_int(row, "train_seed", -1),
                 "receiver_episode": int(receiver_episode),
                 "sender_episode": int(sender_episode),
@@ -194,6 +200,8 @@ def _sender_semantics_summary(rows: List[Dict]) -> List[Dict]:
         out.append(
             {
                 "condition": condition,
+                "condition_alias": condition_alias(condition),
+                "condition_display": condition_display(condition),
                 "train_seed": int(seed),
                 "checkpoint_episode": int(episode),
                 "eval_policy": eval_policy,
@@ -236,6 +244,8 @@ def _receiver_semantics_summary(rows: List[Dict]) -> List[Dict]:
         out.append(
             {
                 "condition": condition,
+                "condition_alias": condition_alias(condition),
+                "condition_display": condition_display(condition),
                 "train_seed": int(seed),
                 "checkpoint_episode": int(episode),
                 "eval_policy": eval_policy,
@@ -293,6 +303,8 @@ def _sender_alignment_summary(rows: List[Dict]) -> List[Dict]:
         out.append(
             {
                 "condition": condition,
+                "condition_alias": condition_alias(condition),
+                "condition_display": condition_display(condition),
                 "train_seed": int(seed),
                 "checkpoint_episode": int(episode),
                 "eval_policy": eval_policy,
@@ -404,6 +416,8 @@ def _receiver_by_sender_summary(trace_rows: List[Dict]) -> List[Dict]:
         out.append(
             {
                 "condition": condition,
+                "condition_alias": condition_alias(condition),
+                "condition_display": condition_display(condition),
                 "train_seed": int(seed),
                 "checkpoint_episode": int(episode),
                 "eval_policy": eval_policy,
@@ -438,6 +452,8 @@ def _comm_snapshot(comm_rows: List[Dict]) -> List[Dict]:
         out.append(
             {
                 "condition": row.get("condition"),
+                "condition_alias": condition_alias(row.get("condition")),
+                "condition_display": condition_display(row.get("condition")),
                 "train_seed": _as_int(row, "train_seed", -1),
                 "checkpoint_episode": _as_int(row, "checkpoint_episode", 0),
                 "metric": row.get("metric"),
@@ -465,6 +481,9 @@ def _control_summary(control_main_rows: List[Dict], reference_main_rows: List[Di
         out.append(
             {
                 "train_seed": int(seed),
+                "condition": "cond1",
+                "condition_alias": condition_alias("cond1"),
+                "condition_display": condition_display("cond1"),
                 "f_value": f_key,
                 "control_coop": _as_float(row, "coop_rate"),
                 "reference_coop": _as_float(ref, "coop_rate") if ref is not None else "",
@@ -539,6 +558,15 @@ def main():
     _write_csv(os.path.join(out_dir, "comm_snapshot.csv"), comm_snapshot_rows)
     _write_csv(os.path.join(out_dir, "control_summary.csv"), control_summary_rows)
 
+    checkpoint_episodes = sorted(
+        {
+            int(row["checkpoint_episode"])
+            for row in intervention_rows + sender_summary_rows + receiver_summary_rows + alignment_rows + receiver_by_sender_rows
+            if str(row.get("checkpoint_episode", "")).strip() not in ("", "0")
+        }
+    )
+    latest_episode = checkpoint_episodes[-1] if len(checkpoint_episodes) > 0 else 0
+
     helpful_rows = [
         row for row in intervention_rows
         if row["f_value"] in ("3.500", "5.000")
@@ -546,22 +574,25 @@ def main():
     ]
     harmful_late_rows = [
         row for row in intervention_rows
-        if int(row["checkpoint_episode"]) == 200000
+        if latest_episode > 0
+        and int(row["checkpoint_episode"]) == latest_episode
         and row["f_value"] in ("3.500", "5.000")
         and float(row["delta_coop_none_minus_intervention"]) < -0.05
     ]
     final_sender_gain = [
         float(row["delta_crossplay_minus_matched"])
         for row in crossplay_rows
-        if int(row["receiver_episode"]) == 200000
-        and int(row["sender_episode"]) != 200000
+        if latest_episode > 0
+        and int(row["receiver_episode"]) == latest_episode
+        and int(row["sender_episode"]) != latest_episode
         and row["f_value"] in ("3.500", "5.000")
     ]
     final_receiver_gain = [
         float(row["delta_crossplay_minus_matched"])
         for row in crossplay_rows
-        if int(row["sender_episode"]) == 200000
-        and int(row["receiver_episode"]) != 200000
+        if latest_episode > 0
+        and int(row["sender_episode"]) == latest_episode
+        and int(row["receiver_episode"]) != latest_episode
         and row["f_value"] in ("3.500", "5.000")
     ]
     drift_call = "inconclusive"
@@ -578,28 +609,32 @@ def main():
     late_sender_semantics = [
         row
         for row in sender_summary_rows
-        if int(row["checkpoint_episode"]) == 200000
+        if latest_episode > 0
+        and int(row["checkpoint_episode"]) == latest_episode
         and row.get("ablation") == "none"
         and row.get("cross_play") == "none"
     ]
     late_receiver_semantics = [
         row
         for row in receiver_summary_rows
-        if int(row["checkpoint_episode"]) == 200000
+        if latest_episode > 0
+        and int(row["checkpoint_episode"]) == latest_episode
         and row.get("ablation") == "none"
         and row.get("cross_play") == "none"
     ]
     late_alignment_rows = [
         row
         for row in alignment_rows
-        if int(row["checkpoint_episode"]) == 200000
+        if latest_episode > 0
+        and int(row["checkpoint_episode"]) == latest_episode
         and row.get("ablation") == "none"
         and row.get("cross_play") == "none"
     ]
     late_receiver_by_sender = [
         row
         for row in receiver_by_sender_rows
-        if int(row["checkpoint_episode"]) == 200000
+        if latest_episode > 0
+        and int(row["checkpoint_episode"]) == latest_episode
         and row.get("receiver_id") == "all_agents"
         and row.get("ablation") == "none"
         and row.get("cross_play") == "none"
@@ -627,6 +662,8 @@ def main():
         "# Phase 3 Messaging Diagnostics Report",
         "",
         "## Overview",
+        f"- condition aliases: cond1 -> {condition_alias('cond1')}, cond2 -> {condition_alias('cond2')}",
+        f"- latest checkpoint episode in this report: {latest_episode}",
         f"- checkpoint suite rows: {len(suite_main_rows)}",
         f"- checkpoint suite trace rows: {len(suite_trace_rows)}",
         f"- cross-play rows: {len(crossplay_main_rows)}",
@@ -634,17 +671,17 @@ def main():
         "",
         "## Decision Readout",
         f"- messages ever causally helpful online: {'yes' if len(helpful_rows) > 0 else 'no'}",
-        f"- late-stage harmful/anti-cooperative interventions detected at 200k: {'yes' if len(harmful_late_rows) > 0 else 'no'}",
+        f"- harmful/anti-cooperative interventions detected at the latest checkpoint ({latest_episode}): {'yes' if len(harmful_late_rows) > 0 else 'no'}",
         f"- cross-play localization: {drift_call}",
         (
-            "- late sender semantics lean more toward action encoding than regime encoding"
+            f"- sender semantics at the latest checkpoint ({latest_episode}) lean more toward action encoding than regime encoding"
             if action_link > regime_link
-            else "- late sender semantics lean at least as much toward regime encoding as action encoding"
+            else f"- sender semantics at the latest checkpoint ({latest_episode}) lean at least as much toward regime encoding as action encoding"
         ),
-        f"- average late token effect on cooperation (m1 - m0 across fhat bins): {token_effect:.3f}",
-        f"- average late sender-specific token effect magnitude: {sender_specific_token_effect:.3f}",
-        f"- late action-polarity alignment across senders: {action_alignment:.3f}",
-        f"- late regime-polarity alignment across senders: {regime_alignment:.3f}",
+        f"- average token effect on cooperation at the latest checkpoint (m1 - m0 across fhat bins): {token_effect:.3f}",
+        f"- average sender-specific token effect magnitude at the latest checkpoint: {sender_specific_token_effect:.3f}",
+        f"- action-polarity alignment across senders at the latest checkpoint: {action_alignment:.3f}",
+        f"- regime-polarity alignment across senders at the latest checkpoint: {regime_alignment:.3f}",
         "",
         "## Key Files",
         f"- intervention deltas: `{os.path.join(out_dir, 'intervention_delta_table.csv')}`",

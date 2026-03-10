@@ -5,6 +5,8 @@ import csv
 import os
 from typing import Dict, List, Tuple
 
+from src.analysis.condition_labels import condition_alias, condition_display
+
 
 def _read_csv_rows(path: str) -> List[Dict]:
     if path == "" or not os.path.exists(path):
@@ -100,6 +102,8 @@ def main():
         out.append(
             {
                 "condition": condition,
+                "condition_alias": condition_alias(condition),
+                "condition_display": condition_display(condition),
                 "train_seed": int(seed),
                 "checkpoint_episode": int(episode),
                 "f_value": f_key,
