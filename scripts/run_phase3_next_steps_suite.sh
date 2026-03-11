@@ -109,6 +109,7 @@ train_mute_after_50k() {
 
 eval_mute_after_50k() {
   log "eval mute-after-50k continuation"
+  rm -rf "$MUTE_EVAL_ROOT"
   "$PYTHON_BIN" -m src.analysis.run_phase3_trimmed_eval \
     --checkpoint_dir "$MUTE_ROOT" \
     --suite_out_dir "$MUTE_EVAL_ROOT/suite" \
@@ -122,8 +123,7 @@ eval_mute_after_50k() {
     --crossplay_receiver_milestones 150000 \
     --n_eval_episodes 300 \
     --eval_seed 9001 \
-    --max_workers 4 \
-    --skip_existing
+    --max_workers 4
 
   "$PYTHON_BIN" -m src.analysis.aggregate_phase3_report \
     --suite_main_csv "$MUTE_EVAL_ROOT/suite/checkpoint_suite_main.csv" \
@@ -195,6 +195,7 @@ eval_controls_to_150k_mode() {
   local ckpt_dir="$CONTROL_150K_ROOT/$mode"
   local out_dir="$CONTROL_150K_EVAL_ROOT/$mode"
   log "eval 150k control mode=$mode"
+  rm -rf "$out_dir"
   "$PYTHON_BIN" -m src.analysis.run_phase3_trimmed_eval \
     --checkpoint_dir "$ckpt_dir" \
     --suite_out_dir "$out_dir/suite" \
@@ -208,8 +209,7 @@ eval_controls_to_150k_mode() {
     --crossplay_receiver_milestones 150000 \
     --n_eval_episodes 300 \
     --eval_seed 9001 \
-    --max_workers 4 \
-    --skip_existing
+    --max_workers 4
 
   "$PYTHON_BIN" -m src.analysis.summarize_phase3_welfare \
     --suite_main_csv "$out_dir/suite/checkpoint_suite_main.csv" \
@@ -273,6 +273,7 @@ extend_annealed_to_150k_5seeds() {
 
 eval_5seed_extension() {
   log "eval 5-seed 150k learned/no-comm bundle"
+  rm -rf "$FIVESEED_150K_EVAL_ROOT"
   "$PYTHON_BIN" -m src.analysis.run_phase3_trimmed_eval \
     --checkpoint_dir "$FIVESEED_150K_ROOT" \
     --suite_out_dir "$FIVESEED_150K_EVAL_ROOT/suite" \
@@ -286,8 +287,7 @@ eval_5seed_extension() {
     --crossplay_receiver_milestones 150000 \
     --n_eval_episodes 300 \
     --eval_seed 9001 \
-    --max_workers 4 \
-    --skip_existing
+    --max_workers 4
 
   "$PYTHON_BIN" -m src.analysis.run_phase3_common_polarity_rescue \
     --checkpoint_dir "$FIVESEED_150K_ROOT" \

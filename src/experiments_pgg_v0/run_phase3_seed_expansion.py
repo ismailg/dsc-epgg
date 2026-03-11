@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import glob
 import json
 import os
 import subprocess
@@ -34,14 +35,28 @@ def _fixedf_ckpt(fixed_f_dir: str, seed: int) -> str:
 def _train_ckpt(checkpoint_dir: str, condition: str, seed: int, episode: int) -> str:
     base = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}.pt")
     ep_path = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt")
+    prefix = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}")
+    ep_candidates = sorted(glob.glob(f"{prefix}*_ep{int(episode)}.pt"))
     if os.path.exists(ep_path):
         return ep_path
+    if len(ep_candidates) > 0:
+        return ep_candidates[0]
+
+    base_candidates = []
     if os.path.exists(base):
+        base_candidates.append(base)
+    base_candidates.extend(
+        path
+        for path in sorted(glob.glob(f"{prefix}*.pt"))
+        if path not in base_candidates and f"_ep{int(episode)}.pt" not in path
+    )
+
+    for candidate in base_candidates:
         payload = None
         try:
             import torch  # local import to keep startup cheap
 
-            payload = torch.load(base, map_location="cpu")
+            payload = torch.load(candidate, map_location="cpu")
         except Exception:
             payload = None
         config = payload.get("config", {}) if isinstance(payload, dict) else {}
@@ -49,7 +64,7 @@ def _train_ckpt(checkpoint_dir: str, condition: str, seed: int, episode: int) ->
         episode_offset = int(config.get("episode_offset", 0) or 0)
         effective_final = episode_offset + final_local
         if effective_final == int(episode):
-            return base
+            return candidate
     raise FileNotFoundError(
         f"missing init checkpoint for {condition} seed={seed} episode={episode} in {checkpoint_dir}"
     )
