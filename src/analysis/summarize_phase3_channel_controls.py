@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import argparse
 import csv
+import math
 import os
 import re
+from statistics import stdev
 from typing import Dict, List
 
 from src.analysis.condition_labels import condition_alias, condition_display
@@ -99,6 +101,20 @@ def _mean(values: List[float]) -> float:
     return float(sum(vals) / max(1, len(vals)))
 
 
+def _std(values: List[float]) -> float:
+    vals = [float(v) for v in values]
+    if len(vals) <= 1:
+        return 0.0
+    return float(stdev(vals))
+
+
+def _sem(values: List[float]) -> float:
+    vals = [float(v) for v in values]
+    if len(vals) <= 1:
+        return 0.0
+    return float(_std(vals) / math.sqrt(len(vals)))
+
+
 def _summarize(rows: List[Dict]) -> List[Dict]:
     grouped = {}
     for row in rows:
@@ -124,7 +140,11 @@ def _summarize(rows: List[Dict]) -> List[Dict]:
                 "f_value": f_value,
                 "n_seeds": int(len(cur)),
                 "mean_coop_rate": _mean([row["coop_rate"] for row in cur]),
+                "std_coop_rate": _std([row["coop_rate"] for row in cur]),
+                "sem_coop_rate": _sem([row["coop_rate"] for row in cur]),
                 "mean_avg_welfare": _mean([row["avg_welfare"] for row in cur]),
+                "std_avg_welfare": _std([row["avg_welfare"] for row in cur]),
+                "sem_avg_welfare": _sem([row["avg_welfare"] for row in cur]),
             }
         )
     return out
@@ -132,6 +152,14 @@ def _summarize(rows: List[Dict]) -> List[Dict]:
 
 def parse_args():
     p = argparse.ArgumentParser()
+    p.add_argument(
+        "--mode_suite",
+        nargs=2,
+        action="append",
+        metavar=("MODE", "CSV"),
+        default=[],
+        help="Arbitrary mode label and checkpoint_suite_main.csv path. If provided, these override the legacy mode-specific args.",
+    )
     p.add_argument(
         "--learned_suite_csv",
         type=str,
@@ -165,11 +193,18 @@ def main():
     out_dir = os.path.abspath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
 
+    mode_suites = list(args.mode_suite or [])
+    if len(mode_suites) == 0:
+        mode_suites = [
+            ("learned", args.learned_suite_csv),
+            ("always_zero", args.zero_suite_csv),
+            ("indep_random", args.uniform_suite_csv),
+            ("public_random", args.public_suite_csv),
+        ]
+
     rows = []
-    rows.extend(_collect_mode_rows("learned", args.learned_suite_csv))
-    rows.extend(_collect_mode_rows("always_zero", args.zero_suite_csv))
-    rows.extend(_collect_mode_rows("indep_random", args.uniform_suite_csv))
-    rows.extend(_collect_mode_rows("public_random", args.public_suite_csv))
+    for mode, suite_csv in mode_suites:
+        rows.extend(_collect_mode_rows(str(mode), str(suite_csv)))
 
     summary_rows = _summarize(rows)
     _write_csv(os.path.join(out_dir, "channel_control_raw.csv"), rows)
