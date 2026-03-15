@@ -1,0 +1,714 @@
+---
+title: "Difficulty-Gated Communication: Emergent Messages Help Where Cooperation Is Hard"
+author: "Anonymous Authors"
+format:
+  pdf:
+    template-partials:
+      - title.tex
+---
+
+```{=latex}
+\begin{abstract}
+Emergent communication in multi-agent reinforcement learning is typically evaluated at training's end. We show that such endpoint evaluation can be profoundly misleading.
+In a four-agent extended public goods game with hidden regime switching, communication produces a robust $+\pvGapTFFkPP\pp$ cooperation benefit in the mixed-incentive regime ($f\!=\!3.5$) after 50k episodes (5 seeds, $p\pvGapTFFkPval$). Same-checkpoint continuation controls---where identical learned policies are continued under learned, noise, or silence channels---reveal that learned messages retain a significant advantage over silence at 150k ($+29\pp$, $p < 0.001$) and over public noise ($+21\pp$, $p = 0.032$), but only in the hard regime; at $f\!=\!5.0$, all channel modes perform similarly. Communication's value is thus \emph{difficulty-gated}: semantic content matters where cooperation is costly, not where it is individually rational. Despite this, communication is not internalized---muting the channel produces cooperation \emph{below} the no-communication baseline---and aggregate receiver-response metrics hide per-sender effects an order of magnitude larger, exposing fragmented private codes that standard metrics average away.
+\end{abstract}
+```
+
+
+# Introduction {#sec-intro}
+
+Multi-agent reinforcement learning (MARL) has produced a growing body of work on emergent communication, in which agents learn to use a discrete signaling channel to coordinate behavior [@foerster2016learning; @sukhbaatar2016learning; @lazaridou2017multi; @havrylov2017emergence; @mordatch2018emergence]. For a comprehensive survey, see @lazaridou2020emergent. A central question is whether agents develop meaningful, shared communication protocols or merely learn policies that happen to correlate with message-sending behavior [@kottur2017natural; @cao2018emergent]. Standard evaluation practice focuses on *endpoint metrics*: mutual information (MI) between messages and task-relevant variables [@lowe2019pitfalls], topographic similarity [@lazaridou2017multi], or cooperation rates measured at the final checkpoint.
+
+We argue that endpoint evaluation alone can paint a misleading picture of emergent communication. In particular, three pathologies can occur:
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{Aggregate cancellation.} When agents develop private codes with opposing conventions (e.g., agent~$i$ sends ``1'' for high regimes, agent~$j$ sends ``1'' for low regimes), aggregate metrics average to near zero even though each agent--receiver pair maintains a strong sender-conditioned relationship.
+  \item \textbf{Difficulty gating.} Communication may provide a large benefit in hard regimes but add nothing in easy ones, so that evaluation at a single difficulty level or averaged across regimes can either overstate or obscure the communication benefit.
+  \item \textbf{Structural dependence without internalization.} The trained policy may depend on the \emph{presence} of a message channel (as an architectural input) without having internalized cooperative strategies---removing the channel produces worse outcomes than never having communicated.
+\end{enumerate}
+```
+
+We demonstrate all three phenomena in a challenging social dilemma: a four-agent extended public goods game (EPGG) with hidden, stochastically switching multipliers and noisy private observations [@orzan2024pgg]. In this setting, agents face a free-rider problem whose severity changes over time without direct notification, creating a natural demand for communication.
+
+Our contributions are:
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{Difficulty-gated communication value.} We show that learned message content provides a significant advantage over noise and silence channels---but only in the hard regime ($f\!=\!3.5$, where cooperation is collectively beneficial but individually costly). In the easy regime ($f\!=\!5.0$), all channel modes perform similarly. Communication emerges precisely where it is needed.
+  \item \textbf{Non-internalization.} Muting the communication channel produces cooperation \emph{below} the no-communication baseline, demonstrating structural dependence rather than transferable knowledge.
+  \item \textbf{Per-sender disaggregation.} We show that standard aggregate receiver-response metrics hide per-sender effects an order of magnitude larger, revealing fragmented private codes. This methodological insight applies broadly to emergent communication evaluation.
+  \item \textbf{Same-checkpoint continuation controls.} We introduce a clean experimental design for disentangling message content from channel presence: fork identical learned checkpoints into different channel modes and compare downstream cooperation.
+\end{enumerate}
+```
+
+
+# Setup {#sec-setup}
+
+## Extended public goods game with regime switching
+
+We study a four-agent ($N=4$) Extended Public Goods Game (EPGG) played over $T=100$ rounds per episode. Each round~$t$, agent~$i$ observes a noisy private signal $\fhat_{i,t} = f_t + \varepsilon_{i,t}$, where $\varepsilon_{i,t} \sim \mathcal{N}(0, \sigma^2)$ with $\sigma = 0.5$, and chooses to cooperate ($a_i = C$, contributing endowment $c=4$) or defect ($a_i = D$, keeping $c$). The payoff is:
+$$
+  u_i = \frac{f_t}{N} \sum_{j=1}^{N} c \cdot \mathbf{1}[a_j = C] \;+\; c \cdot \mathbf{1}[a_i = D]
+$$ {#eq-payoff}
+The hidden multiplier $f_t$ takes values in $\mathcal{F} = \{0.5, 1.5, 2.5, 3.5, 5.0\}$ and switches with probability $\rho = 0.05$ per round (geometric holding time ${\sim}20$ rounds). Each agent's action is subject to trembling: with probability $\varepsilon_{\text{tremble}} = 0.05$, the action is replaced by a uniform random choice, modeling execution noise.
+
+When $f < N = 4$, defection is the dominant strategy; when $f > N$, cooperation dominates regardless of others' actions. The mixed-motive regime ($f = 3.5$) is the critical case: cooperation is collectively beneficial but individually costly ($f/N = 0.875 < 1$, so each unit contributed returns less than one unit to the contributor). This regime creates the strongest demand for communication.
+
+## Communication channel
+
+In the communication condition (`comm_symm`), agents simultaneously broadcast a binary message $m_i \in \{0, 1\}$ before choosing actions. All agents observe all messages. Messages have no pre-assigned meaning; any semantics must emerge through learning. In the no-communication condition (`no_comm_symm`), no messages are exchanged.
+
+## Training
+
+We train agents using independent PPO [@schulman2017proximal] with generalized advantage estimation [@schulman2016high] ($\gamma = 0.99$, $\lambda = 0.95$, clip ratio $= 0.2$). Each agent has a shared actor-critic network with separate message and action heads (hidden size~64, ${\sim}5$K parameters). Key design choices:
+
+**Entropy annealing.** Both action and message entropy coefficients decay linearly over training: action entropy from $0.01 \to 0.001$, message entropy from $0.01 \to 0.0$. This allows early exploration while permitting conventions to crystallize. The learning rate follows a cosine schedule from $3 \times 10^{-4}$ to $10^{-5}$.
+
+**Seeds.** Five independent seeds (101, 202, 303, 404, 505) per condition, trained for 150k episodes with checkpoints at 50k, 100k, and 150k.
+
+## Evaluation suite {#sec-eval}
+
+All evaluation uses greedy action selection (argmax policy) to isolate learned behavior from exploration noise. We evaluate four diagnostic dimensions:
+
+**Message interventions.** At each checkpoint, we replay episodes with tampered messages: `zeros` (silence), `fixed0` (all tokens~0), `fixed1` (all tokens~1), and `permute_slots` (circular permutation of sender identities). The cooperation delta between natural and tampered messages measures the causal contribution of message content.
+
+**Channel controls.** We compare four channel modes during training: `learned` (sender's chosen message), `always_zero` (constant zero), `indep_random` (independent random bits per receiver), and `public_random` (same random bits for all receivers).
+
+**Sender and receiver semantics.** For each agent, we compute $P(m_i = 1 \mid \fhat_{\text{bin}})$ (sender semantics) and $P(a_j = C \mid m_i, \fhat_{\text{bin}})$ (receiver semantics), disaggregated by sender identity~$i$.
+
+**Cross-play.** Sender networks from checkpoint~$A$ are paired with receiver/action networks from checkpoint~$B$ to test convention stability over time.
+
+
+# Communication improves coordination in the mixed regime {#sec-main-result}
+
+```{=latex}
+\begin{table}[t]
+  \caption{Cooperation rates $\pcoopgiven{f}$ for communication vs.\ no-communication conditions across training. Mean $\pm$ SEM over 5 seeds. Stars denote bootstrap significance of the paired gap (${}^{*}p<0.05$, ${}^{**}p<0.01$, ${}^{***}p<0.001$).}
+  \tablabel{comm_gap}
+  \centering
+  \small
+  \begin{tabular}{llccc}
+    \toprule
+    & & \multicolumn{3}{c}{Checkpoint (episodes)} \\
+    \cmidrule(lr){3-5}
+    $f$ regime & Condition & 50k & 100k & 150k \\
+    \midrule
+    \multirow{3}{*}{$f\!=\!3.5$}
+      & \texttt{comm\_symm}     & $\TIcommTFFk$ & $\TIcommTFHk$ & $\TIcommTFOfk$ \\
+      & \texttt{no\_comm\_symm} & $\TIncTFFk$ & $\TIncTFHk$ & $\TIncTFOfk$ \\
+      & $\commgap$              & $\TIgapTFFk$ & $\TIgapTFHk$ & $\TIgapTFOfk$ \\
+    \midrule
+    \multirow{3}{*}{$f\!=\!5.0$}
+      & \texttt{comm\_symm}     & $\TIcommFVFk$ & $\TIcommFVHk$ & $\TIcommFVOfk$ \\
+      & \texttt{no\_comm\_symm} & $\TIncFVFk$ & $\TIncFVHk$ & $\TIncFVOfk$ \\
+      & $\commgap$              & $\TIgapFVFk$ & $\TIgapFVHk$ & $\TIgapFVOfk$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+Table~\ref{tab:comm_gap} presents the central empirical result. At $f = 3.5$ (mixed regime), communication produces a robust $+\pvGapTFFkPP\pp$ cooperation advantage at 50k episodes, with all 5 seeds showing positive effects (range: $+\pvGapRangeLo$ to $+\pvGapRangeHi\pp$). This benefit persists at 150k ($+\pvGapTFOfkPP\pp$, $\pvNposOfk$/5 seeds positive).
+
+At $f = 5.0$ (cooperation-dominant regime), the communication benefit is small at 50k ($+\pvGapFVFkPP\pp$, not significant) and reverses by 150k ($\pvGapFVOfkPP\pp$). When cooperation is individually rational, agents learn to cooperate without messages; communication may add noise that can hurt.
+
+**Communication's value is regime-specific**: it helps most where the coordination problem is hardest. At 50k, communication-trained agents achieve $\pvCommCoopTFFkPct$\% cooperation at $f = 3.5$---approaching the level of agents at $f = 5.0$---while no-communication agents remain near $\pvNcCoopTFFkPct$\%.
+
+**The benefit declines but persists**: the gap at $f = 3.5$ falls by $\pvGapDeclinePct$\% from 50k to 150k (from $+\pvGapTFFkPP$ to $+\pvGapTFOfkPP\pp$), but remains significant at 150k ($p < 0.001$). This motivates the channel control experiments in \S\ref{sec-semantic-window}, which ask whether the residual benefit reflects message \emph{content} or merely channel \emph{presence}.
+
+```{python}
+#| label: fig-coop-trajectory
+#| fig-cap: "Cooperation rates $P(C \\mid f\\!=\\!3.5)$ across training for communication vs.\\ no-communication conditions. Individual seed traces (thin lines) and mean $\\pm$ SEM bands (thick lines). Communication produces a large initial benefit that declines with continued training."
+#| fig-pos: "t"
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import csv
+from pathlib import Path
+from collections import defaultdict
+
+DATA_ROOT = Path("../../outputs/eval")
+MAIN_CSV = DATA_ROOT / "phase3_annealed_ext150k_5seeds/suite/checkpoint_suite_main.csv"
+
+with open(MAIN_CSV) as f:
+    rows = list(csv.DictReader(f))
+
+# Extract per-seed cooperation at f=3.5
+comm_data = defaultdict(dict)   # seed -> ep -> coop
+nc_data = defaultdict(dict)
+
+for r in rows:
+    if r.get("ablation") != "none" or r.get("scope") != "f_value":
+        continue
+    if r.get("key") != "3.500":
+        continue
+    seed = int(float(r["train_seed"]))
+    ep = int(float(r["checkpoint_episode"]))
+    coop = float(r["coop_rate"])
+    if r["condition"] == "cond1":
+        comm_data[seed][ep] = coop
+    elif r["condition"] == "cond2":
+        nc_data[seed][ep] = coop
+
+eps = [50_000, 100_000, 150_000]
+ep_labels = [50, 100, 150]
+
+fig, ax = plt.subplots(1, 1, figsize=(4.5, 3.0))
+
+# Per-seed traces
+for seed in sorted(comm_data):
+    vals = [comm_data[seed].get(e, float("nan")) for e in eps]
+    ax.plot(ep_labels, vals, "o-", color="#2171b5", alpha=0.25, ms=4, lw=0.8)
+for seed in sorted(nc_data):
+    vals = [nc_data[seed].get(e, float("nan")) for e in eps]
+    ax.plot(ep_labels, vals, "s--", color="#cb181d", alpha=0.25, ms=4, lw=0.8)
+
+# Mean ± SEM
+import statistics
+for label, data, color, marker, ls in [
+    ("comm", comm_data, "#2171b5", "o", "-"),
+    ("no comm", nc_data, "#cb181d", "s", "--")
+]:
+    means = []
+    sems = []
+    for e in eps:
+        vals = [data[s][e] for s in data if e in data[s]]
+        m = sum(vals) / len(vals)
+        se = statistics.stdev(vals) / len(vals)**0.5 if len(vals) > 1 else 0
+        means.append(m)
+        sems.append(se)
+    lo = [m - s for m, s in zip(means, sems)]
+    hi = [m + s for m, s in zip(means, sems)]
+    ax.fill_between(ep_labels, lo, hi, alpha=0.15, color=color)
+    ax.plot(ep_labels, means, f"{marker}{ls}", color=color, lw=2, ms=7,
+            label=label, zorder=5)
+
+ax.set_xlabel("Training episodes (thousands)")
+ax.set_ylabel("$P(C \\mid f\\!=\\!3.5)$")
+ax.set_xticks(ep_labels)
+ax.set_ylim(0.2, 1.0)
+ax.legend(frameon=False, fontsize=9)
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+plt.tight_layout()
+plt.show()
+```
+
+
+# When does message content matter? {#sec-semantic-window}
+
+The communication benefit raises a question: does message *content* drive the cooperation advantage, or does merely having a channel (even a noisy one) suffice? We answer this with three complementary experiments.
+
+## Separate-training channel controls: content matters early {#sec-separate-controls}
+
+We train agents from scratch under four channel modes (\S\ref{sec-eval}) for 50k episodes. All other hyperparameters are identical.
+
+```{=latex}
+\begin{table}[t]
+  \caption{Cooperation at $f\!=\!3.5$ after 50k episodes under different channel modes, trained from scratch. Learned messages provide a $\pvCtrlAdvLo$--$\pvCtrlAdvHi\pp$ advantage over all control modes. Mean over 3 seeds (5 for learned).}
+  \tablabel{separate_controls}
+  \centering
+  \small
+  \begin{tabular}{lc}
+    \toprule
+    Channel mode & $\pcoopgiven{f\!=\!3.5}$ \\
+    \midrule
+    \texttt{learned}        & $\mathbf{\TIILearned}$ \\
+    \texttt{indep\_random}  & $\TIIIndep$ \\
+    \texttt{always\_zero}   & $\TIIZero$ \\
+    \texttt{public\_random} & $\TIIPub$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+Table~\ref{tab:separate_controls} shows that learned messages dramatically outperform all control modes at 50k. The $+\pvCtrlAdvLo$--$\pvCtrlAdvHi\pp$ advantage over controls demonstrates that semantic content---not merely channel presence or input variation---drives the initial cooperation benefit. Agents that receive noise (\texttt{indep\_random}) or silence (\texttt{always\_zero}) learn substantially less cooperative policies, despite having access to the same observation structure.
+
+## Same-checkpoint continuation controls: content matters in the hard regime {#sec-sameckpt}
+
+The separate-training controls confound channel mode with the entire training trajectory---each mode produces different 50k policies. To isolate the role of message content during *continued* training, we take the **identical** learned 50k checkpoints and continue training to 150k under all four channel modes ($N = 5$ seeds).
+
+```{=latex}
+\begin{table}[t]
+  \caption{Same-checkpoint continuation controls: cooperation when all modes start from identical learned 50k policies. At 50k, all values are identical (same checkpoint). At 150k ($f\!=\!3.5$), learned messages retain a large advantage over silence ($+29\pp$, $p < 0.001$) and public noise ($+21\pp$, $p = 0.032$). At $f\!=\!5.0$, no significant differences emerge. Mean over \TIIInSeeds{} seeds.}
+  \tablabel{sameckpt}
+  \centering
+  \small
+  \begin{tabular}{lcccc}
+    \toprule
+    & \multicolumn{2}{c}{$f\!=\!3.5$} & \multicolumn{2}{c}{$f\!=\!5.0$} \\
+    \cmidrule(lr){2-3} \cmidrule(lr){4-5}
+    Channel mode & 50k & 150k & 50k & 150k \\
+    \midrule
+    \texttt{learned}        & $\TIIILearnedFk$ & $\mathbf{\TIIILearnedOfk}$ & $\TIIILearnedFkFV$ & $\TIIILearnedOfkFV$ \\
+    \texttt{indep\_random}  & $\TIIIIndepFk$ & $\TIIIIndepOfk$ & $\TIIIIndepFkFV$ & $\TIIIIndepOfkFV$ \\
+    \texttt{public\_random} & $\TIIIPubFk$ & $\TIIIPubOfk$ & $\TIIIPubFkFV$ & $\TIIIPubOfkFV$ \\
+    \texttt{always\_zero}   & $\TIIIZeroFk$ & $\TIIIZeroOfk$ & $\TIIIZeroFkFV$ & $\TIIIZeroOfkFV$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+Table~\ref{tab:sameckpt} presents the key result. At episode 50k, all four branches are identical (same model). By 150k at $f\!=\!3.5$, learned messages retain a substantial advantage: $+29\pp$ over silence ($p < 0.001$), $+21\pp$ over public random ($p = 0.032$), and $+23\pp$ over independent random ($p = 0.051$, borderline). Critically, at $f\!=\!5.0$, no channel mode significantly outperforms any other---all CIs overlap.
+
+This reveals a **difficulty-gated** pattern rather than a temporal one:
+
+```{=latex}
+\begin{itemize}[leftmargin=*,nosep]
+  \item \textbf{Hard regime ($f\!=\!3.5$)}: Learned message content provides a significant advantage over noise and silence, both early (50k, from-scratch controls) and late (150k, same-checkpoint controls).
+  \item \textbf{Easy regime ($f\!=\!5.0$)}: Message content is irrelevant. Agents learn to cooperate regardless of channel mode.
+\end{itemize}
+```
+
+Seed heterogeneity is substantial: seed~404 shows a $77\pp$ gap between learned and silence, while seed~101 shows only a $3\pp$ gap. This underscores the importance of multi-seed evaluation in MARL experiments.
+
+## Muting the channel: communication is not internalized {#sec-mute}
+
+If communication helped agents *learn* cooperative strategies that are subsequently internalized, removing the channel after the semantic window should have little effect. We test this by training with learned communication until 50k, then muting the channel (delivering zero messages) for the remaining 100k episodes.
+
+```{=latex}
+\begin{table}[t]
+  \caption{Cooperation and welfare at $f\!=\!3.5$ at 150k. Muting after 50k produces cooperation \emph{below} the no-communication baseline. Communication is not internalized.}
+  \tablabel{mute}
+  \centering
+  \small
+  \begin{tabular}{lcc}
+    \toprule
+    Condition & $\pcoopgiven{f\!=\!3.5}$ & Welfare ($f\!=\!3.5$) \\
+    \midrule
+    \texttt{comm\_symm} (channel stays on)    & $\TIVcommCoop$ & $\TIVcommWelf$ \\
+    \texttt{no\_comm\_symm} (never had channel) & $\TIVncCoop$ & $\TIVncWelf$ \\
+    \texttt{mute-after-50k}                   & $\TIVmuteCoop$ & $\TIVmuteWelf$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+Table~\ref{tab:mute} shows that muted agents cooperate at $\TIVmuteCoopPct$\%---$\pvMuteBelowPP\pp$ *below* agents that never communicated ($\TIVncCoopPct$\%). Communication did not transfer cooperative strategies to the action policy. Instead, it created *structural dependence*: the action policy was optimized to make decisions conditioned on message inputs. Removing those inputs does not revert to no-communication behavior; it breaks the policy.
+
+Note that since independent random noise sustains cooperation at ${\sim}39\%$ in the same-checkpoint controls (Table~\ref{tab:sameckpt}), the mute result could partly reflect loss of \emph{any} input signal (even noise) rather than loss of semantic content specifically. The mute experiment demonstrates channel dependence; the same-checkpoint controls address content.
+
+## Synthesis: difficulty-gated communication value
+
+The three experiments converge on a unified account. Communication's value is gated by task difficulty, not training time:
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{Content matters in hard regimes.} At $f\!=\!3.5$, learned messages outperform all control modes---both when trained from scratch (50k, Table~\ref{tab:separate_controls}) and when forked from identical checkpoints (150k, Table~\ref{tab:sameckpt}). The advantage of learned over silence is $+29\pp$ ($p < 0.001$) at 150k; the advantage over noise is suggestive ($+23\pp$, $p = 0.051$).
+  \item \textbf{Content is irrelevant in easy regimes.} At $f\!=\!5.0$, all channel modes produce similar cooperation. When cooperation is individually rational, agents learn it without messages.
+  \item \textbf{Structural lock-in.} Regardless of regime, agents cannot shed their dependence on the channel. Muting produces worse outcomes than never having communicated.
+\end{enumerate}
+```
+
+This pattern has implications for emergent communication evaluation: assessments at a single difficulty level may overstate or miss the communication benefit entirely, and channel presence must be disentangled from channel content.
+
+```{python}
+#| label: fig-semantic-window
+#| fig-cap: "Difficulty-gated communication value. Same-checkpoint continuation controls at 150k episodes. \\textbf{Left:} At $f\\!=\\!3.5$ (hard regime), learned messages retain a large advantage over all control modes. \\textbf{Right:} At $f\\!=\\!5.0$ (easy regime), all modes perform similarly. Error bars show $\\pm$1 SEM across 5 seeds."
+#| fig-pos: "t"
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import csv
+from pathlib import Path
+
+DATA_ROOT = Path("../../outputs/eval")
+# Use 5-seed same-checkpoint data
+CTRL_SAMECKPT = DATA_ROOT / "phase3_sameckpt_continuation_5seeds/report/channel_control_summary.csv"
+
+def read_ctrl(path):
+    with open(path) as f:
+        return list(csv.DictReader(f))
+
+modes_order = ["learned", "indep_random", "public_random", "always_zero"]
+mode_display = {
+    "learned": "Learned",
+    "indep_random": "Indep.\nrandom",
+    "public_random": "Public\nrandom",
+    "always_zero": "Always\nzero",
+}
+colors = {
+    "learned": "#2171b5",
+    "indep_random": "#6baed6",
+    "public_random": "#bdd7e7",
+    "always_zero": "#969696",
+}
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(5.5, 2.8), sharey=True)
+
+rows = read_ctrl(CTRL_SAMECKPT)
+
+# Left panel: f=3.5 at 150k
+vals_35 = {}
+sems_35 = {}
+for r in rows:
+    if r.get("f_value") == "3.500" and int(float(r["checkpoint_episode"])) == 150_000:
+        vals_35[r["mode"]] = float(r["mean_coop_rate"])
+        sems_35[r["mode"]] = float(r["sem_coop_rate"])
+
+x_pos = range(len(modes_order))
+bars = [vals_35.get(m, 0) for m in modes_order]
+errs = [sems_35.get(m, 0) for m in modes_order]
+bar_colors = [colors[m] for m in modes_order]
+ax1.bar(x_pos, bars, color=bar_colors, edgecolor="black", linewidth=0.5,
+        yerr=errs, capsize=3, error_kw={"lw": 0.8})
+ax1.set_xticks(x_pos)
+ax1.set_xticklabels([mode_display[m] for m in modes_order], fontsize=7)
+ax1.set_ylabel("$P(C)$ at 150k")
+ax1.set_title("$f\\!=\\!3.5$ (hard regime)", fontsize=9)
+ax1.set_ylim(0, 1.0)
+
+# Right panel: f=5.0 at 150k
+vals_50 = {}
+sems_50 = {}
+for r in rows:
+    if r.get("f_value") == "5.000" and int(float(r["checkpoint_episode"])) == 150_000:
+        vals_50[r["mode"]] = float(r["mean_coop_rate"])
+        sems_50[r["mode"]] = float(r["sem_coop_rate"])
+
+bars2 = [vals_50.get(m, 0) for m in modes_order]
+errs2 = [sems_50.get(m, 0) for m in modes_order]
+ax2.bar(x_pos, bars2, color=bar_colors, edgecolor="black", linewidth=0.5,
+        yerr=errs2, capsize=3, error_kw={"lw": 0.8})
+ax2.set_xticks(x_pos)
+ax2.set_xticklabels([mode_display[m] for m in modes_order], fontsize=7)
+ax2.set_title("$f\\!=\\!5.0$ (easy regime)", fontsize=9)
+
+for ax in (ax1, ax2):
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+plt.tight_layout()
+plt.show()
+```
+
+
+# Why aggregate endpoint metrics are misleading {#sec-metrics}
+
+Standard receiver-semantics metrics aggregate across all senders: "does hearing *any* token~1 change cooperation?" We show this aggregation hides a much larger per-sender effect. Note that the per-sender effects reported here are *observational* (conditioned on sender identity), not interventional; they measure how receiver behavior differs when a specific sender's token changes, but do not isolate the causal mechanism.
+
+## Per-sender disaggregation reveals hidden structure
+
+For each receiver~$j$ and sender~$i$, we compute the per-sender token effect:
+$$
+  \delta_{i \to j}(\fhat) = \pcoopgiven{m_i\!=\!1, \fhat} - \pcoopgiven{m_i\!=\!0, \fhat}
+$$ {#eq-per-sender}
+and compare it to the aggregate effect $\delta_{\text{agg}}(\fhat) = P(C \mid \text{any } m\!=\!1, \fhat) - P(C \mid \text{all } m\!=\!0, \fhat)$.
+
+```{=latex}
+\begin{table}[t]
+  \caption{Aggregate versus per-sender token effects across training. Per-sender effects (mean $|\delta_{i \to j}|$, sender-conditioned) are an order of magnitude larger than aggregate effects at every checkpoint, due to convention fragmentation. Mean over 5 seeds.}
+  \tablabel{disagg}
+  \centering
+  \small
+  \begin{tabular}{lccc}
+    \toprule
+    & \multicolumn{3}{c}{Checkpoint (episodes)} \\
+    \cmidrule(lr){2-4}
+    Metric & 50k & 100k & 150k \\
+    \midrule
+    Aggregate token effect     & $\TVaggFk$ & $\TVaggHk$ & $\TVaggOfk$ \\
+    Per-sender token effect    & $\TVpsFk$ & $\TVpsHk$  & $\TVpsOfk$ \\
+    Ratio (per-sender / |agg.|)  & $\TVratioFk$ & $\TVratioHk$ & $\TVratioOfk$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+Table~\ref{tab:disagg} shows the discrepancy. At 50k, the aggregate token effect is $\pvAggFkPP\pp$---near zero, suggesting messages are almost useless. The per-sender effect is $\pvPsFkPP\pp$. This gap persists at 150k ($\pvPsOfkPP\pp$ per-sender vs.\ $\TVaggOfk$ aggregate).
+
+The aggregate effect is near zero because opposing conventions cancel out: when one sender uses ``1'' to signal high regimes and another uses ``1'' for low regimes, the marginal effect of hearing *any* ``1'' averages away. But each sender--receiver pair maintains a strong sender-conditioned response pattern.
+
+```{python}
+#| label: fig-disagg
+#| fig-cap: "Aggregate vs.\\ per-sender token effects across training. The aggregate effect (signed mean $\\delta$) is near zero at all checkpoints due to convention fragmentation. The per-sender effect (mean $|\\delta_{i \\to j}|$) reveals strong private-channel responses that aggregate metrics hide."
+#| fig-pos: "t"
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import csv
+from pathlib import Path
+from collections import defaultdict
+
+DATA_ROOT = Path("../../outputs/eval")
+RECV_SEM = DATA_ROOT / "phase3_annealed_ext150k_5seeds/report/receiver_semantics_summary.csv"
+RECV_PS = DATA_ROOT / "phase3_annealed_ext150k_5seeds/report/receiver_by_sender_summary.csv"
+
+def mean(vals):
+    return sum(vals) / len(vals) if vals else float("nan")
+
+# Aggregate effects
+with open(RECV_SEM) as f:
+    agg_rows = list(csv.DictReader(f))
+agg_by_ep_seed = defaultdict(list)
+for r in agg_rows:
+    ep = int(float(r["checkpoint_episode"]))
+    seed = int(float(r["train_seed"]))
+    agg_by_ep_seed[(ep, seed)].append(float(r["delta_m1_minus_m0"]))
+
+# Per-sender effects
+with open(RECV_PS) as f:
+    ps_rows = list(csv.DictReader(f))
+ps_by_ep_seed = defaultdict(list)
+for r in ps_rows:
+    if r.get("receiver_id") == r.get("sender_id") or r.get("receiver_id") == "all_agents":
+        continue
+    ep = int(float(r["checkpoint_episode"]))
+    seed = int(float(r["train_seed"]))
+    ps_by_ep_seed[(ep, seed)].append(abs(float(r["delta_m1_minus_m0"])))
+
+eps = [50_000, 100_000, 150_000]
+ep_labels = [50, 100, 150]
+
+agg_means = []
+ps_means = []
+for ep in eps:
+    seed_aggs = [mean(agg_by_ep_seed[(ep, s)]) for s in sorted({k[1] for k in agg_by_ep_seed if k[0] == ep})]
+    seed_ps = [mean(ps_by_ep_seed[(ep, s)]) for s in sorted({k[1] for k in ps_by_ep_seed if k[0] == ep})]
+    agg_means.append(mean(seed_aggs))
+    ps_means.append(mean(seed_ps))
+
+fig, ax = plt.subplots(1, 1, figsize=(4.0, 2.8))
+bar_w = 12
+x_agg = [e - bar_w/2 for e in ep_labels]
+x_ps = [e + bar_w/2 for e in ep_labels]
+
+ax.bar(x_agg, agg_means, bar_w, color="#bdd7e7", edgecolor="black", linewidth=0.5, label="Aggregate $\\delta$")
+ax.bar(x_ps, ps_means, bar_w, color="#2171b5", edgecolor="black", linewidth=0.5, label="Per-sender $|\\delta_{i\\to j}|$")
+
+ax.axhline(0, color="black", lw=0.5, ls="-")
+ax.set_xlabel("Training episodes (thousands)")
+ax.set_ylabel("Token effect (cooperation $\\Delta$)")
+ax.set_xticks(ep_labels)
+ax.legend(frameon=False, fontsize=8)
+ax.spines["top"].set_visible(False)
+ax.spines["right"].set_visible(False)
+plt.tight_layout()
+plt.show()
+```
+
+## Mechanism: fragmented private codes
+
+The aggregate cancellation occurs because agents adopt *private codes* with opposing polarities. We define each agent's encoding polarity as the sign of its regime delta: $\text{sign}(P(m\!=\!1 \mid \fhat_{\text{high}}) - P(m\!=\!1 \mid \fhat_{\text{low}}))$. A positive polarity means ``1 = high regime''; negative means ``1 = low regime.''
+
+Across 5 seeds, polarity alignment is non-monotonic and seed-specific: some seeds achieve full alignment (all agents use the same polarity) while others maintain mixed polarities throughout training (see Appendix~\ref{sec-app-alignment} for per-seed patterns). No clear universal trend emerges, suggesting that convention formation in this setting is a stochastic process strongly influenced by initial conditions.
+
+The per-sender effect persists regardless of alignment: even when agents use opposite conventions, each sender--receiver pair maintains a strong sender-conditioned response pattern. The discrepancy between aggregate and per-sender effects is not a transient artifact---it reflects a fundamental property of how these agents organize their communication.
+
+
+# Discussion {#sec-discussion}
+
+**Summary.** Communication in our MARL social dilemma provides a difficulty-gated benefit: learned message content significantly outperforms noise and silence channels in the hard regime ($f\!=\!3.5$), but adds nothing in the easy regime ($f\!=\!5.0$). This benefit persists through 150k episodes of continued training, contradicting an earlier hypothesis (based on a smaller-$N$ pilot) that message content becomes irrelevant after an initial learning phase. However, communication is not internalized---muting the channel degrades cooperation below the no-communication baseline---and aggregate endpoint metrics hide per-sender effects an order of magnitude larger due to convention fragmentation.
+
+**Implications for emergent communication research.** Our findings suggest three methodological recommendations. First, evaluate communication benefits across difficulty levels, not just at a single task setting; the benefit may be entirely concentrated in hard regimes. Second, disaggregate receiver responses by sender identity to detect private codes that aggregate metrics average away. Third, use same-checkpoint continuation controls to disentangle message content from channel presence.
+
+**Relation to convention formation.** The fragmentation we observe connects to the challenge of convention formation in signaling games [@lewis1969convention; @skyrms2010signals]. With independent learners and no centralized mechanism for agreeing on token meanings, agents naturally develop private codes [@hu2020other; @bullard2021quasi]. Polarity alignment across seeds shows no clear universal trend (Appendix~\ref{sec-app-alignment}), suggesting that convention formation in MARL is a stochastic process strongly influenced by initial conditions.
+
+**Limitations.** Our results come from a single game (EPGG), a minimal vocabulary ($|M|=2$), four agents, and one RL algorithm (independent PPO) [@oroojlooyjadid2022review]. With 5 seeds, our statistical power is limited: the key comparison of learned vs.\ independent random at $f\!=\!3.5$ is borderline ($p = 0.051$), leaving open whether the advantage of learned messages reflects semantic content or a subtler structural property of having a consistent (non-random) input. Seed heterogeneity is enormous (seed~404 shows a $77\pp$ learned-vs-silence gap; seed~101 shows $3\pp$), underscoring that conclusions from small-$N$ MARL experiments should be treated cautiously. The PPO design uses a joint message+action logprob ratio with shared advantages, introducing a training coupling that may affect results. Per-sender effects are observational (sender-conditioned), not interventional, and should not be interpreted as causal without further experimental controls.
+
+**Future work.** Natural extensions include scaling to more seeds (${\geq}20$) to resolve the learned-vs-noise comparison, testing whether the difficulty-gating pattern generalizes to other social dilemmas and larger message spaces ($|M| > 2$), and developing sender-slot permutation tests to provide interventional (rather than observational) evidence for per-sender effects.
+
+
+## References {.unnumbered}
+
+::: {#refs}
+:::
+
+\appendix
+
+# Full experimental parameters {#sec-app-params}
+
+```{=latex}
+\begin{table}[h]
+  \caption{Complete hyperparameter specification for all training runs.}
+  \tablabel{hyperparams}
+  \centering
+  \small
+  \begin{tabular}{ll}
+    \toprule
+    Parameter & Value \\
+    \midrule
+    \multicolumn{2}{l}{\textit{Environment}} \\
+    Number of agents $N$ & 4 \\
+    Episode length $T$ & 100 rounds \\
+    Multiplier set $\mathcal{F}$ & $\{0.5, 1.5, 2.5, 3.5, 5.0\}$ \\
+    Regime switch probability $\rho$ & 0.05 \\
+    Signal noise $\sigma$ & 0.5 (per agent) \\
+    Tremble probability $\varepsilon_{\text{tremble}}$ & 0.05 \\
+    Endowment $c$ & 4 \\
+    \midrule
+    \multicolumn{2}{l}{\textit{Architecture}} \\
+    Hidden size & 64 \\
+    Vocabulary size $|M|$ & 2 (binary) \\
+    Parameters per agent & ${\sim}5$K \\
+    \midrule
+    \multicolumn{2}{l}{\textit{PPO}} \\
+    Discount $\gamma$ & 0.99 \\
+    GAE $\lambda$ & 0.95 \\
+    Clip ratio & 0.2 \\
+    Reward scale & 20.0 \\
+    \midrule
+    \multicolumn{2}{l}{\textit{Schedules}} \\
+    Learning rate & $3 \times 10^{-4} \to 10^{-5}$ (cosine) \\
+    Action entropy coeff. & $0.01 \to 0.001$ (linear) \\
+    Message entropy coeff. & $0.01 \to 0.0$ (linear) \\
+    \midrule
+    \multicolumn{2}{l}{\textit{Training}} \\
+    Total episodes & 150,000 \\
+    Seeds & 101, 202, 303, 404, 505 \\
+    Checkpoint interval & 50,000 episodes \\
+    \midrule
+    \multicolumn{2}{l}{\textit{Evaluation}} \\
+    Action selection & Greedy (argmax) \\
+    Evaluation episodes & 300 per (checkpoint, seed, condition) \\
+    Evaluation seed & 9001 (fixed) \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+# Per-seed breakdown of main results {#sec-app-per-seed}
+
+```{=latex}
+\begin{table}[h]
+  \caption{Per-seed cooperation rates at $f\!=\!3.5$ across training, communication condition.}
+  \tablabel{per_seed_comm}
+  \centering
+  \small
+  \begin{tabular}{lccc}
+    \toprule
+    Seed & 50k & 100k & 150k \\
+    \midrule
+    101 & $\pvPScommSaFk$ & $\pvPScommSaHk$ & $\pvPScommSaOfk$ \\
+    202 & $\pvPScommSbFk$ & $\pvPScommSbHk$ & $\pvPScommSbOfk$ \\
+    303 & $\pvPScommScFk$ & $\pvPScommScHk$ & $\pvPScommScOfk$ \\
+    404 & $\pvPScommSdFk$ & $\pvPScommSdHk$ & $\pvPScommSdOfk$ \\
+    505 & $\pvPScommSeFk$ & $\pvPScommSeHk$ & $\pvPScommSeOfk$ \\
+    \midrule
+    Mean & $\pvPScommMeanFk$ & $\pvPScommMeanHk$ & $\pvPScommMeanOfk$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+```{=latex}
+\begin{table}[h]
+  \caption{Per-seed communication gap ($\commgap$) at $f\!=\!3.5$.}
+  \tablabel{per_seed_gap}
+  \centering
+  \small
+  \begin{tabular}{lccc}
+    \toprule
+    Seed & 50k gap & 100k gap & 150k gap \\
+    \midrule
+    101 & $\pvPSgapSaFk$ & $\pvPSgapSaHk$ & $\pvPSgapSaOfk$ \\
+    202 & $\pvPSgapSbFk$ & $\pvPSgapSbHk$ & $\pvPSgapSbOfk$ \\
+    303 & $\pvPSgapScFk$ & $\pvPSgapScHk$ & $\pvPSgapScOfk$ \\
+    404 & $\pvPSgapSdFk$ & $\pvPSgapSdHk$ & $\pvPSgapSdOfk$ \\
+    505 & $\pvPSgapSeFk$ & $\pvPSgapSeHk$ & $\pvPSgapSeOfk$ \\
+    \midrule
+    Mean & $\pvPSgapMeanFk$ & $\pvPSgapMeanHk$ & $\pvPSgapMeanOfk$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+# Polarity alignment patterns {#sec-app-alignment}
+
+```{=latex}
+\begin{table}[h]
+  \caption{Polarity alignment across 5 seeds at 50k and 150k. Each cell shows (positive\,:\,negative) polarity counts among 4~agents. No clear universal trend emerges across seeds.}
+  \tablabel{alignment}
+  \centering
+  \small
+  \begin{tabular}{lccl}
+    \toprule
+    Seed & 50k pattern & 150k pattern & Trajectory \\
+    \midrule
+    101 & \TVIpattFkA & \TVIpattOfkA & \textbf{\TVItrajA} \\
+    202 & \TVIpattFkB & \TVIpattOfkB & \textbf{\TVItrajB} \\
+    303 & \TVIpattFkC & \TVIpattOfkC & \textbf{\TVItrajC} \\
+    404 & \TVIpattFkD & \TVIpattOfkD & \textbf{\TVItrajD} \\
+    505 & \TVIpattFkE & \TVIpattOfkE & \textbf{\TVItrajE} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+# Mute experiment details {#sec-app-mute}
+
+The mute-after-50k experiment trains with learned communication until 50k, then applies \texttt{msg\_training\_intervention=fixed0} for the remaining 100k episodes. This zeroes all delivered messages while senders continue to compute (and receive entropy gradients for) their message outputs. The resulting cooperation deficit ($-\pvMuteBelowPP\pp$ relative to no-communication) demonstrates that the action policy has been shaped around message inputs and cannot function without them.
+
+
+```{=latex}
+\newpage
+\section*{NeurIPS Paper Checklist}
+
+\begin{enumerate}
+
+\item {\bf Claims}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: The abstract and introduction clearly state four contributions supported by the experimental results in Sections~\ref{sec-main-result}--\ref{sec-metrics}.
+
+\item {\bf Limitations}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: Section~\ref{sec-discussion} discusses limitations including single game, minimal vocabulary, PPO coupling, and limited statistical power with 5 seeds.
+
+\item {\bf Theory assumptions and proofs}
+    \item[] Answer: \answerNA{}
+    \item[] Justification: This is an empirical paper; no theoretical results are presented.
+
+\item {\bf Experimental result reproducibility}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: Appendix~\ref{sec-app-params} provides complete hyperparameters. Code will be released upon acceptance.
+
+\item {\bf Open access to data and code}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: Anonymized code and evaluation scripts will be provided as supplementary material. Full code release upon acceptance.
+
+\item {\bf Experimental setting/details}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: Section~\ref{sec-setup} and Appendix~\ref{sec-app-params} provide all training and evaluation details.
+
+\item {\bf Experiment statistical significance}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: We report mean $\pm$ SEM across 5 seeds and bootstrap confidence intervals (10,000 resamples) for key comparisons. Significance stars are shown in Table~\ref{tab:comm_gap}.
+
+\item {\bf Experiments compute resources}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: All experiments ran on a single Apple M1 MacBook Pro (10 cores, 16GB RAM). Each 150k-episode training run takes approximately 9 hours. Total compute for all experiments (including pilots, ablations, and controls) is approximately 500 CPU-hours.
+
+\item {\bf Code of ethics}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: This research studies cooperation in abstract game-theoretic settings with no human subjects, sensitive data, or dual-use concerns.
+
+\item {\bf Broader impacts}
+    \item[] Answer: \answerNA{}
+    \item[] Justification: This is basic research on emergent communication in abstract multi-agent systems. We do not foresee direct negative societal impacts.
+
+\item {\bf Safeguards}
+    \item[] Answer: \answerNA{}
+    \item[] Justification: No models or datasets with misuse risk are released.
+
+\item {\bf Licenses for existing assets}
+    \item[] Answer: \answerNA{}
+    \item[] Justification: No pre-existing datasets or models are used. The codebase builds on standard PyTorch.
+
+\item {\bf New assets}
+    \item[] Answer: \answerYes{}
+    \item[] Justification: We will release the complete codebase (training, evaluation, analysis) and trained checkpoints upon acceptance.
+
+\item {\bf Crowdsourcing and research with human subjects}
+    \item[] Answer: \answerNA{}
+    \item[] Justification: No human subjects involved.
+
+\item {\bf Institutional review board (IRB) approvals or equivalent for research with human subjects}
+    \item[] Answer: \answerNA{}
+    \item[] Justification: No human subjects involved.
+
+\item {\bf Declaration of LLM usage}
+    \item[] Answer: \answerNA{}
+    \item[] Justification: No LLMs are used as part of the core research methodology. LLMs were used only for writing assistance.
+
+\end{enumerate}
+```

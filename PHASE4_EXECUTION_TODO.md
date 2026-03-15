@@ -8,6 +8,9 @@
 - [x] Create paper package scaffold
 - [x] Validate new analysis scripts on existing Phase 3 outputs
 - [ ] Launch same-checkpoint continuation training (`fixed0`, `uniform`, `public_random`)
+  - `fixed0` training live on seeds `101/202/303`
+  - seeds `404/505` queued behind `max_workers=3`
+  - `uniform` and `public_random` queued after `fixed0`
 - [ ] Evaluate same-checkpoint continuation bundle
 - [ ] Regenerate bootstrap / paired-delta outputs with same-checkpoint bundle
 - [ ] Regenerate permutation summary with same-checkpoint bundle

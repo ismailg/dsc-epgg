@@ -1,0 +1,47 @@
+project:
+  type: default
+  output-dir: _output
+  pre-render:
+    - python paper_data.py --gen-defs
+
+format:
+  pdf:
+    documentclass: article
+    pdf-engine: pdflatex
+    include-in-header:
+      - text: |
+          \usepackage[preprint]{neurips_2025}
+          \usepackage{booktabs}
+          \usepackage{amsfonts}
+          \usepackage{amsmath}
+          \usepackage{nicefrac}
+          \usepackage{microtype}
+          \usepackage{xcolor}
+          \usepackage{graphicx}
+          \usepackage{subcaption}
+          \usepackage{multirow}
+          \usepackage{enumitem}
+          % Custom commands
+          \newcommand{\pcoop}{P(\text{C})}
+          \newcommand{\pcoopgiven}[1]{P(\text{C} \mid #1)}
+          \newcommand{\pp}{\text{\,pp}}
+          \newcommand{\fhat}{\hat{f}}
+          \newcommand{\commgap}{\Delta_{\text{comm}}}
+          \newcommand{\tablabel}[1]{\label{tab:#1}}
+    include-before-body:
+      - paper_values.tex
+    keep-tex: true
+    cite-method: natbib
+    biblio-style: plainnat
+    toc: false
+    number-sections: false
+    geometry: []
+    papersize: letter
+    fontsize: 10pt
+    colorlinks: true
+
+bibliography: refs.bib
+engine: jupyter
+execute:
+  echo: false
+  warning: false

@@ -1,0 +1,17 @@
+/.quarto/
+__pycache__/
+_output/
+.DS_Store
+
+# Quarto intermediate TeX (regenerated on each build)
+main.tex
+
+# LaTeX build artifacts
+*.aux
+*.log
+*.bbl
+*.blg
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.out
