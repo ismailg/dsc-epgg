@@ -226,6 +226,25 @@ class PPOAgentV2:
             probs.detach(),
         )
 
+    def sample_action_batch(self, obs_batch, value_obs_batch=None):
+        obs_t = self._obs_tensor(obs_batch)
+        logits = self.action_actor(obs_t)
+        dist = Categorical(logits=logits)
+        actions = dist.sample()
+        if value_obs_batch is None:
+            value_t = obs_t
+        else:
+            value_t = self._obs_tensor(value_obs_batch)
+        values = self.value_net(value_t).squeeze(-1)
+        probs = torch.softmax(logits, dim=-1)
+        return (
+            actions.detach().cpu().numpy().astype(np.int32),
+            dist.log_prob(actions).detach().cpu().numpy().astype(np.float32),
+            values.detach().cpu().numpy().astype(np.float32),
+            dist.entropy().detach().cpu().numpy().astype(np.float32),
+            probs.detach(),
+        )
+
     def sample_message(self, obs):
         if not self.can_send or self.message_actor is None:
             return None, None, None, None
@@ -238,6 +257,21 @@ class PPOAgentV2:
             int(msg.item()),
             float(dist.log_prob(msg).item()),
             float(dist.entropy().item()),
+            probs.detach(),
+        )
+
+    def sample_message_batch(self, obs_batch):
+        if not self.can_send or self.message_actor is None:
+            return None, None, None, None
+        obs_t = self._obs_tensor(obs_batch)
+        logits = self.message_actor(obs_t)
+        dist = Categorical(logits=logits)
+        msgs = dist.sample()
+        probs = torch.softmax(logits, dim=-1)
+        return (
+            msgs.detach().cpu().numpy().astype(np.int32),
+            dist.log_prob(msgs).detach().cpu().numpy().astype(np.float32),
+            dist.entropy().detach().cpu().numpy().astype(np.float32),
             probs.detach(),
         )
 
@@ -279,6 +313,7 @@ class PPOTrainer:
         clip_ratio: float = 0.2,
         value_coeff: float = 0.5,
         entropy_coeff: float = 0.01,
+        msg_entropy_coeff: float = None,
         max_grad_norm: float = 0.5,
         ppo_epochs: int = 4,
         mini_batch_size: int = 32,
@@ -287,11 +322,17 @@ class PPOTrainer:
         message_entropy_target: float = None,
         normalize_value_loss: bool = True,
     ):
+        """
+        Entropy coefficient for the message head. If None, defaults to entropy_coeff (backward compatible).
+        """
         del lr  # agents own optimizers; kept for API compatibility with plan text.
         self.agents = agents
         self.clip_ratio = float(clip_ratio)
         self.value_coeff = float(value_coeff)
         self.entropy_coeff = float(entropy_coeff)
+        self.msg_entropy_coeff = (
+            float(msg_entropy_coeff) if msg_entropy_coeff is not None else float(entropy_coeff)
+        )
         self.max_grad_norm = float(max_grad_norm)
         self.ppo_epochs = int(ppo_epochs)
         self.mini_batch_size = int(mini_batch_size)
@@ -452,7 +493,7 @@ class PPOTrainer:
                         - self.entropy_coeff * entropy_bonus
                     )
                     if msg_entropy_val.abs().item() > 0.0:
-                        total_loss = total_loss - self.entropy_coeff * msg_entropy_val
+                        total_loss = total_loss - self.msg_entropy_coeff * msg_entropy_val
                     if self.sign_lambda != 0.0:
                         total_loss = total_loss + self.sign_lambda * msg_sign_loss
 
@@ -484,4 +525,5 @@ class PPOTrainer:
         if n_metric_updates > 0:
             for key in metrics:
                 metrics[key] /= float(n_metric_updates)
+        metrics["msg_entropy_coeff"] = float(self.msg_entropy_coeff)
         return metrics

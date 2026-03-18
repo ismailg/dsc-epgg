@@ -44,3 +44,18 @@ def test_train_with_session_logging(tmp_path):
     assert len(parts) >= 3
     consolidated = session_dir / "data_ci_123_consolidated.npz"
     assert consolidated.exists()
+
+
+def test_full_loop_runs_vectorized(tmp_path):
+    cfg = minimal_test_config(
+        n_episodes=3,
+        T=6,
+        num_envs=2,
+        save_path=str(tmp_path / "agents_vec.pt"),
+        seed=321,
+    )
+    metrics = train(cfg)
+    assert len(metrics) == 3
+    assert (tmp_path / "agents_vec.pt").exists()
+    assert all(int(row["num_envs"]) == 2 for row in metrics)
+    assert all(int(row["steps"]) == 12 for row in metrics)
