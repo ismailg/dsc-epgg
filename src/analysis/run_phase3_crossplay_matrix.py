@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import csv
-import glob
 import json
 import os
 import subprocess
@@ -10,51 +9,34 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List
 
+from src.analysis.checkpoint_artifacts import (
+    atomic_write_json,
+    atomic_write_rows,
+    csv_has_data_rows,
+    resolve_checkpoint_path,
+)
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 
 def _checkpoint_path(checkpoint_dir: str, condition: str, seed: int, episode: int) -> str:
-    prefix = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}")
-    exact_ep = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt")
-    ep_candidates = sorted(glob.glob(f"{prefix}*_ep{int(episode)}.pt"))
-    if os.path.exists(exact_ep):
-        return exact_ep
-    if len(ep_candidates) > 0:
-        return ep_candidates[0]
-
-    base_candidates = sorted(
-        path
-        for path in glob.glob(f"{prefix}*.pt")
-        if f"_ep{int(episode)}.pt" not in path
-    )
-    try:
-        import torch  # local import to keep startup cheap when not needed
-    except Exception:
-        torch = None  # type: ignore
-    for base in base_candidates:
-        payload = None
-        if torch is not None:
-            try:
-                payload = torch.load(base, map_location="cpu")
-            except Exception:
-                payload = None
-        config = payload.get("config", {}) if isinstance(payload, dict) else {}
-        final_local = int(config.get("n_episodes", 0) or 0)
-        episode_offset = int(config.get("episode_offset", 0) or 0)
-        effective_final = episode_offset + final_local
-        if int(episode) == effective_final or (effective_final <= 0 and int(episode) == 200000):
-            return base
-    if len(base_candidates) == 1:
-        return base_candidates[0]
-    raise FileNotFoundError(
-        f"checkpoint missing for {condition} seed={seed} episode={episode}"
-    )
+    return resolve_checkpoint_path(checkpoint_dir, condition, seed, episode)
 
 
-def _task_name(condition: str, seed: int, sender_episode: int, receiver_episode: int) -> str:
+def _task_name(
+    condition: str,
+    sender_seed: int,
+    receiver_seed: int,
+    sender_episode: int,
+    receiver_episode: int,
+) -> str:
+    if int(sender_seed) == int(receiver_seed):
+        return (
+            f"{condition}_seed{int(sender_seed)}_sender{int(sender_episode)}_receiver{int(receiver_episode)}"
+        )
     return (
-        f"{condition}_seed{int(seed)}_sender{int(sender_episode)}_receiver{int(receiver_episode)}"
+        f"{condition}_sseed{int(sender_seed)}_sender{int(sender_episode)}"
+        f"_rseed{int(receiver_seed)}_receiver{int(receiver_episode)}"
     )
 
 
@@ -64,7 +46,7 @@ def _run_task(task: Dict, raw_dir: str, log_dir: str, skip_existing: bool):
     out_comm_csv = os.path.join(raw_dir, f"{task['name']}_comm.csv")
     log_path = os.path.join(log_dir, f"{task['name']}.log")
     expected = [out_csv, out_condition_csv, out_comm_csv]
-    if skip_existing and all(os.path.exists(path) for path in expected):
+    if skip_existing and all(csv_has_data_rows(path) for path in expected):
         return {
             **task,
             "out_csv": out_csv,
@@ -95,6 +77,9 @@ def _run_task(task: Dict, raw_dir: str, log_dir: str, skip_existing: bool):
         "--out_condition_csv",
         out_condition_csv,
     ]
+    eval_sigmas = task.get("eval_sigmas")
+    if eval_sigmas is not None and len(eval_sigmas) > 0:
+        cmd.extend(["--eval_sigmas", *[str(float(v)) for v in eval_sigmas]])
     env = os.environ.copy()
     env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
     with open(log_path, "w", encoding="utf-8") as log_f:
@@ -125,7 +110,6 @@ def _read_csv_rows(path: str) -> List[Dict]:
 def _write_rows(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = []
     seen = set()
     for row in rows:
@@ -134,11 +118,7 @@ def _write_rows(path: str, rows: List[Dict]):
                 continue
             seen.add(key)
             fieldnames.append(key)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _aggregate_results(results: List[Dict], out_dir: str):
@@ -147,6 +127,8 @@ def _aggregate_results(results: List[Dict], out_dir: str):
     condition_rows: List[Dict] = []
     for result in results:
         extra = {
+            "sender_seed": int(result["sender_seed"]),
+            "receiver_seed": int(result["receiver_seed"]),
             "sender_episode": int(result["sender_episode"]),
             "receiver_episode": int(result["receiver_episode"]),
         }
@@ -167,6 +149,8 @@ def parse_args():
     p.add_argument("--out_dir", type=str, default="outputs/eval/phase3/crossplay_matrix")
     p.add_argument("--condition", type=str, default="cond1")
     p.add_argument("--seeds", nargs="*", type=int, default=[101, 202])
+    p.add_argument("--sender_seeds", nargs="*", type=int, default=None)
+    p.add_argument("--receiver_seeds", nargs="*", type=int, default=None)
     p.add_argument(
         "--milestones",
         nargs="*",
@@ -178,6 +162,7 @@ def parse_args():
     p.add_argument("--n_eval_episodes", type=int, default=300)
     p.add_argument("--eval_seed", type=int, default=9001)
     p.add_argument("--max_workers", type=int, default=4)
+    p.add_argument("--eval_sigmas", nargs="*", type=float, default=None)
     p.add_argument("--skip_existing", action="store_true")
     return p.parse_args()
 
@@ -200,36 +185,58 @@ def main():
         if args.receiver_milestones is not None and len(args.receiver_milestones) > 0
         else [int(v) for v in args.milestones]
     )
+    sender_seeds = (
+        [int(v) for v in args.sender_seeds]
+        if args.sender_seeds is not None and len(args.sender_seeds) > 0
+        else [int(v) for v in args.seeds]
+    )
+    receiver_seeds = (
+        [int(v) for v in args.receiver_seeds]
+        if args.receiver_seeds is not None and len(args.receiver_seeds) > 0
+        else [int(v) for v in args.seeds]
+    )
 
     tasks = []
-    for seed in args.seeds:
+    for sender_seed in sender_seeds:
         for sender_episode in sender_milestones:
             sender_ckpt = _checkpoint_path(
                 checkpoint_dir=args.checkpoint_dir,
                 condition=args.condition,
-                seed=int(seed),
+                seed=int(sender_seed),
                 episode=int(sender_episode),
             )
-            for receiver_episode in receiver_milestones:
-                receiver_ckpt = _checkpoint_path(
-                    checkpoint_dir=args.checkpoint_dir,
-                    condition=args.condition,
-                    seed=int(seed),
-                    episode=int(receiver_episode),
-                )
-                tasks.append(
-                    {
-                        "name": _task_name(
-                            args.condition, seed, sender_episode, receiver_episode
-                        ),
-                        "sender_episode": int(sender_episode),
-                        "receiver_episode": int(receiver_episode),
-                        "sender_checkpoint": sender_ckpt,
-                        "receiver_checkpoint": receiver_ckpt,
-                        "n_eval_episodes": int(args.n_eval_episodes),
-                        "eval_seed": int(args.eval_seed),
-                    }
-                )
+            for receiver_seed in receiver_seeds:
+                for receiver_episode in receiver_milestones:
+                    receiver_ckpt = _checkpoint_path(
+                        checkpoint_dir=args.checkpoint_dir,
+                        condition=args.condition,
+                        seed=int(receiver_seed),
+                        episode=int(receiver_episode),
+                    )
+                    tasks.append(
+                        {
+                            "name": _task_name(
+                                args.condition,
+                                sender_seed,
+                                receiver_seed,
+                                sender_episode,
+                                receiver_episode,
+                            ),
+                            "sender_seed": int(sender_seed),
+                            "receiver_seed": int(receiver_seed),
+                            "sender_episode": int(sender_episode),
+                            "receiver_episode": int(receiver_episode),
+                            "sender_checkpoint": sender_ckpt,
+                            "receiver_checkpoint": receiver_ckpt,
+                            "n_eval_episodes": int(args.n_eval_episodes),
+                            "eval_seed": int(args.eval_seed),
+                            "eval_sigmas": (
+                                [float(v) for v in args.eval_sigmas]
+                                if args.eval_sigmas is not None and len(args.eval_sigmas) > 0
+                                else None
+                            ),
+                        }
+                    )
 
     results = []
     with ThreadPoolExecutor(max_workers=max(1, int(args.max_workers))) as ex:
@@ -248,8 +255,7 @@ def main():
 
     results = sorted(results, key=lambda item: item["name"])
     _aggregate_results(results=results, out_dir=out_dir)
-    with open(os.path.join(out_dir, "crossplay_matrix_manifest.json"), "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
+    atomic_write_json(os.path.join(out_dir, "crossplay_matrix_manifest.json"), results)
     print(f"[crossplay] tasks={len(results)} out_dir={out_dir}")
 
 

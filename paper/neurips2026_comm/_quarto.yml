@@ -7,7 +7,7 @@ project:
 format:
   pdf:
     documentclass: article
-    pdf-engine: pdflatex
+    pdf-engine: xelatex
     include-in-header:
       - text: |
           \usepackage[preprint]{neurips_2025}
@@ -28,6 +28,27 @@ format:
           \newcommand{\fhat}{\hat{f}}
           \newcommand{\commgap}{\Delta_{\text{comm}}}
           \newcommand{\tablabel}[1]{\label{tab:#1}}
+          \setmainfont{texgyretermes-regular.otf}[
+            Path=/usr/local/texlive/2024/texmf-dist/fonts/opentype/public/tex-gyre/,
+            BoldFont=texgyretermes-bold.otf,
+            ItalicFont=texgyretermes-italic.otf,
+            BoldItalicFont=texgyretermes-bolditalic.otf
+          ]
+          \setsansfont{texgyreheros-regular.otf}[
+            Path=/usr/local/texlive/2024/texmf-dist/fonts/opentype/public/tex-gyre/,
+            BoldFont=texgyreheros-bold.otf,
+            ItalicFont=texgyreheros-italic.otf,
+            BoldItalicFont=texgyreheros-bolditalic.otf
+          ]
+          \setmonofont{texgyrecursor-regular.otf}[
+            Path=/usr/local/texlive/2024/texmf-dist/fonts/opentype/public/tex-gyre/,
+            BoldFont=texgyrecursor-bold.otf,
+            ItalicFont=texgyrecursor-italic.otf,
+            BoldItalicFont=texgyrecursor-bolditalic.otf
+          ]
+          \setmathfont{texgyretermes-math.otf}[
+            Path=/usr/local/texlive/2024/texmf-dist/fonts/opentype/public/tex-gyre-math/
+          ]
     include-before-body:
       - paper_values.tex
     keep-tex: true

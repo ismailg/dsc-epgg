@@ -168,6 +168,8 @@ def _build_job(args, condition: str, seed: int) -> Job:
                 [
                     "--msg_training_intervention",
                     str(args.msg_training_intervention),
+                    "--msg_training_history_len",
+                    str(int(args.msg_training_history_len)),
                     "--sign_lambda",
                     "0.0",
                     "--list_lambda",
@@ -261,9 +263,10 @@ def parse_args():
     p.add_argument(
         "--msg_training_intervention",
         type=str,
-        choices=["none", "uniform", "public_random", "fixed0", "fixed1"],
+        choices=["none", "uniform", "public_random", "fixed0", "fixed1", "sender_shuffle"],
         default="none",
     )
+    p.add_argument("--msg_training_history_len", type=int, default=4096)
     p.add_argument("--max_workers", type=int, default=2)
     p.add_argument("--skip_existing", action="store_true")
     return p.parse_args()

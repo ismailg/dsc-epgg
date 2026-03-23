@@ -8,6 +8,7 @@ import re
 from statistics import stdev
 from typing import Dict, List
 
+from src.analysis.checkpoint_artifacts import atomic_write_rows
 from src.analysis.condition_labels import condition_alias, condition_display
 
 
@@ -21,7 +22,6 @@ def _read_csv_rows(path: str) -> List[Dict]:
 def _write_csv(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = []
     seen = set()
     for row in rows:
@@ -30,11 +30,7 @@ def _write_csv(path: str, rows: List[Dict]):
                 continue
             seen.add(key)
             fieldnames.append(key)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _as_float(row: Dict, key: str, default: float = 0.0) -> float:

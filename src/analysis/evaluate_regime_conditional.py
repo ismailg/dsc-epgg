@@ -10,7 +10,7 @@ import random
 import re
 import sys
 from collections import defaultdict
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import torch
@@ -22,6 +22,7 @@ if __package__ is None or __package__ == "":
         sys.path.insert(0, _ROOT)
 
 from src.algos.PPO import PPOAgentV2
+from src.analysis.checkpoint_artifacts import atomic_write_rows
 from src.environments import pgg_parallel_v0
 from src.wrappers import ObservationWrapper
 
@@ -134,13 +135,28 @@ def _mi_null_independence_stats(
     }
 
 
-def _env_cfg_from_train_cfg(cfg: Dict, greedy: bool = False) -> Dict:
+def _env_cfg_from_train_cfg(
+    cfg: Dict,
+    greedy: bool = False,
+    eval_sigmas: Optional[Sequence[float]] = None,
+) -> Dict:
+    if eval_sigmas is not None and len(eval_sigmas) > 0:
+        sigmas = [float(v) for v in eval_sigmas]
+        if len(sigmas) == 1:
+            sigmas = sigmas * int(cfg["n_agents"])
+        elif len(sigmas) != int(cfg["n_agents"]):
+            raise ValueError(
+                "eval_sigmas must have length 1 or n_agents="
+                f"{int(cfg['n_agents'])}, got {len(sigmas)}"
+            )
+    else:
+        sigmas = [float(v) for v in cfg["sigmas"]]
     return dict(
         n_agents=int(cfg["n_agents"]),
         num_game_iterations=int(cfg["T"]),
         mult_fact=[float(v) for v in cfg["F"]],
         F=[float(v) for v in cfg["F"]],
-        uncertainties=[float(v) for v in cfg["sigmas"]],
+        uncertainties=sigmas,
         fraction=False,
         rho=float(cfg.get("rho", 0.05)),
         # Greedy eval measures policy preference, so disable tremble noise.
@@ -149,7 +165,11 @@ def _env_cfg_from_train_cfg(cfg: Dict, greedy: bool = False) -> Dict:
     )
 
 
-def _build_eval_objects(payload: Dict, greedy: bool = False):
+def _build_eval_objects(
+    payload: Dict,
+    greedy: bool = False,
+    eval_sigmas: Optional[Sequence[float]] = None,
+):
     cfg = payload["config"]
     n_agents = int(cfg["n_agents"])
     agent_ids = [f"agent_{i}" for i in range(n_agents)]
@@ -196,7 +216,9 @@ def _build_eval_objects(payload: Dict, greedy: bool = False):
             agent.message_actor.eval()
         agents[agent_id] = agent
 
-    env = pgg_parallel_v0.parallel_env(_env_cfg_from_train_cfg(cfg, greedy=greedy))
+    env = pgg_parallel_v0.parallel_env(
+        _env_cfg_from_train_cfg(cfg, greedy=greedy, eval_sigmas=eval_sigmas)
+    )
     return cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature
 
 
@@ -216,12 +238,32 @@ def _extract_f_hat(raw_obs_agent) -> float:
     return float(arr[0]) if arr.size > 0 else 0.0
 
 
+def _binary_action_policy_stats(agent: PPOAgentV2, obs) -> Dict[str, float]:
+    obs_t = agent._obs_tensor(obs)
+    logits_t = agent.action_actor(obs_t)
+    probs_t = torch.softmax(logits_t, dim=-1)
+    logits = logits_t.detach().cpu().numpy().reshape(-1)
+    probs = probs_t.detach().cpu().numpy().reshape(-1)
+    p_cooperate = float(probs[1]) if probs.size >= 2 else float(probs[0])
+    if logits.size >= 2:
+        logit_margin = float(logits[1] - logits[0])
+    else:
+        logit_margin = float(logits[0])
+    greedy_action = int(np.argmax(logits))
+    return {
+        "p_cooperate": p_cooperate,
+        "logit_margin": logit_margin,
+        "greedy_action": greedy_action,
+    }
+
+
 def _apply_message_intervention(
     intervention: str,
     delivered: Dict[str, int],
     wrapper: ObservationWrapper,
     sender_ids: List[str],
     vocab_size: int,
+    sender_shuffle_state: Optional[Dict[str, Dict[str, object]]] = None,
 ) -> Tuple[Dict[str, int], bool]:
     mode = str(intervention or "none").strip().lower()
     out = {sender_id: int(delivered[sender_id]) for sender_id in sender_ids}
@@ -247,11 +289,33 @@ def _apply_message_intervention(
         if vocab_size != 2:
             raise ValueError("msg_intervention=flip requires vocab_size == 2")
         return {sender_id: 1 - int(out[sender_id]) for sender_id in sender_ids}, False
-    if mode == "uniform":
+    if mode in ("uniform", "indep_random"):
         return {
             sender_id: int(np.random.randint(0, vocab_size))
             for sender_id in sender_ids
         }, False
+    if mode == "public_random":
+        shared = int(np.random.randint(0, vocab_size))
+        return {sender_id: shared for sender_id in sender_ids}, False
+    if mode == "sender_shuffle":
+        if sender_shuffle_state is None:
+            raise ValueError("msg_intervention=sender_shuffle requires sender shuffle state")
+        replaced = {}
+        for sender_id in sender_ids:
+            state = sender_shuffle_state.get(sender_id)
+            if state is None:
+                raise ValueError(
+                    f"msg_intervention=sender_shuffle missing sender_id={sender_id}"
+                )
+            tokens = list(state.get("tokens", []))
+            if len(tokens) == 0:
+                raise ValueError(
+                    f"msg_intervention=sender_shuffle empty pool for sender_id={sender_id}"
+                )
+            cursor = int(state.get("cursor", 0))
+            replaced[sender_id] = int(tokens[cursor % len(tokens)])
+            state["cursor"] = cursor + 1
+        return replaced, False
     if mode == "permute_slots":
         if len(sender_ids) <= 1:
             return out, False
@@ -262,8 +326,202 @@ def _apply_message_intervention(
         }, False
     raise ValueError(
         "unknown msg_intervention="
-        f"{intervention!r}; expected one of: none,marginal,zeros,fixed0,fixed1,flip,uniform,permute_slots"
+        f"{intervention!r}; expected one of: "
+        "none,marginal,zeros,fixed0,fixed1,flip,uniform,indep_random,public_random,sender_shuffle,permute_slots"
     )
+
+
+def _resolve_eval_objects(
+    payload: Dict,
+    greedy: bool,
+    cross_play_checkpoint: str,
+    eval_sigmas: Optional[Sequence[float]] = None,
+):
+    cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature = _build_eval_objects(
+        payload, greedy=greedy, eval_sigmas=eval_sigmas
+    )
+    comm_enabled = bool(cfg.get("comm_enabled", False))
+    vocab_size = int(cfg.get("vocab_size", 2))
+    msg_agents = agents
+    cross_play_label = "none"
+    cross_play_checkpoint = str(cross_play_checkpoint or "").strip()
+    if cross_play_checkpoint != "":
+        xp_payload = torch.load(cross_play_checkpoint, map_location="cpu")
+        (
+            xp_cfg,
+            xp_env,
+            xp_wrapper,
+            xp_agents,
+            xp_agent_ids,
+            xp_sender_ids,
+            _xp_value_time_feature,
+        ) = _build_eval_objects(
+            xp_payload,
+            greedy=greedy,
+            eval_sigmas=eval_sigmas,
+        )
+        if int(xp_cfg["n_agents"]) != int(cfg["n_agents"]):
+            raise ValueError(
+                "cross_play mismatch: "
+                f"n_agents primary={cfg['n_agents']} xp={xp_cfg['n_agents']}"
+            )
+        if bool(xp_cfg.get("comm_enabled", False)) != comm_enabled:
+            raise ValueError(
+                "cross_play mismatch: "
+                f"comm_enabled primary={comm_enabled} xp={bool(xp_cfg.get('comm_enabled', False))}"
+            )
+        if int(xp_cfg.get("vocab_size", 2)) != vocab_size:
+            raise ValueError(
+                "cross_play mismatch: "
+                f"vocab_size primary={vocab_size} xp={int(xp_cfg.get('vocab_size', 2))}"
+            )
+        if list(xp_agent_ids) != list(agent_ids):
+            raise ValueError(
+                "cross_play mismatch: "
+                f"agent_ids primary={agent_ids} xp={xp_agent_ids}"
+            )
+        if list(xp_sender_ids) != list(sender_ids):
+            raise ValueError(
+                "cross_play mismatch: "
+                f"sender_ids primary={sender_ids} xp={xp_sender_ids}"
+            )
+        if int(xp_wrapper.obs_dim) != int(wrapper.obs_dim):
+            raise ValueError(
+                "cross_play mismatch: "
+                f"obs_dim primary={wrapper.obs_dim} xp={xp_wrapper.obs_dim}"
+            )
+        msg_agents = xp_agents
+        cross_play_label = os.path.basename(cross_play_checkpoint)
+        try:
+            xp_env.close()
+        except Exception:
+            pass
+    if cross_play_label != "none" and not (comm_enabled and len(sender_ids) > 0):
+        raise ValueError("cross_play_checkpoint requires communication-enabled checkpoints")
+    return (
+        cfg,
+        env,
+        wrapper,
+        agents,
+        agent_ids,
+        sender_ids,
+        value_time_feature,
+        msg_agents,
+        cross_play_label,
+    )
+
+
+def _collect_sender_shuffle_state(
+    cfg: Dict,
+    env,
+    wrapper: ObservationWrapper,
+    agents: Dict[str, PPOAgentV2],
+    msg_agents: Dict[str, PPOAgentV2],
+    agent_ids: List[str],
+    sender_ids: List[str],
+    value_time_feature: bool,
+    n_eval_episodes: int,
+    eval_seed: int,
+    greedy: bool,
+    history_intervention: str = "none",
+) -> Dict[str, Dict[str, object]]:
+    _seed_everything(eval_seed)
+    T = int(cfg["T"])
+    comm_enabled = bool(cfg.get("comm_enabled", False))
+    tokens_by_sender = {sender_id: [] for sender_id in sender_ids}
+    history_intervention_label = _canonical_history_intervention(history_intervention)
+
+    with torch.no_grad():
+        for _episode in range(n_eval_episodes):
+            raw_obs = env.reset()
+            wrapper.reset(agent_ids)
+            current_messages = None
+            done = False
+            steps = 0
+
+            while (not done) and (steps < T):
+                aug_obs = {
+                    agent_id: _apply_history_intervention(
+                        wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages),
+                        wrapper=wrapper,
+                        history_intervention=history_intervention_label,
+                    )
+                    for agent_id in agent_ids
+                }
+                current_true_f = float(_as_float(env.current_multiplier))
+
+                proposed = {}
+                if comm_enabled and len(sender_ids) > 0:
+                    for sender_id in sender_ids:
+                        msg_agent = msg_agents[sender_id]
+                        msg_device = msg_agent.action_actor.net[0].weight.device
+                        obs_t = torch.tensor(
+                            aug_obs[sender_id],
+                            dtype=torch.float32,
+                            device=msg_device,
+                        )
+                        logits = msg_agent.message_actor(obs_t)
+                        if greedy:
+                            msg = int(torch.argmax(logits).item())
+                        else:
+                            msg, _lp, _ent, _probs = msg_agent.sample_message(
+                                aug_obs[sender_id]
+                            )
+                        proposed[sender_id] = int(msg)
+                    for sender_id, msg in proposed.items():
+                        wrapper.update_msg_marginals(sender_id, msg)
+                    delivered = wrapper.apply_msg_dropout(proposed)
+                    for sender_id in sender_ids:
+                        tokens_by_sender[sender_id].append(int(delivered[sender_id]))
+                    current_messages = delivered
+                    aug_obs = {
+                        agent_id: _apply_history_intervention(
+                            wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages),
+                            wrapper=wrapper,
+                            history_intervention=history_intervention_label,
+                        )
+                        for agent_id in agent_ids
+                    }
+
+                intended_actions = {}
+                t_frac = float(steps) / float(max(1, T - 1))
+                for agent_id in agent_ids:
+                    value_obs = (
+                        np.concatenate(
+                            [aug_obs[agent_id], np.array([t_frac], dtype=np.float32)], axis=0
+                        ).astype(np.float32)
+                        if value_time_feature
+                        else aug_obs[agent_id]
+                    )
+                    if greedy:
+                        obs_t = torch.tensor(
+                            aug_obs[agent_id],
+                            dtype=torch.float32,
+                            device=agents[agent_id].action_actor.net[0].weight.device,
+                        )
+                        logits = agents[agent_id].action_actor(obs_t)
+                        action = int(torch.argmax(logits).item())
+                    else:
+                        action, _lp, _value, _ent, _probs = agents[agent_id].sample_action(
+                            aug_obs[agent_id], value_obs=value_obs
+                        )
+                    intended_actions[agent_id] = int(action)
+
+                raw_next, _rewards, done, infos = env.step(intended_actions)
+                executed_actions = infos.get("executed_actions", intended_actions)
+                wrapper.update(executed_actions)
+                raw_obs = raw_next
+                steps += 1
+
+    rng = np.random.default_rng(int(eval_seed) + 2718)
+    out: Dict[str, Dict[str, object]] = {}
+    for sender_id in sender_ids:
+        tokens = list(tokens_by_sender.get(sender_id, []))
+        if len(tokens) > 1:
+            perm = rng.permutation(len(tokens))
+            tokens = [tokens[int(idx)] for idx in perm]
+        out[sender_id] = {"tokens": tokens, "cursor": 0}
+    return out
 
 
 def _parse_sender_flip_map(raw_json: str, sender_ids: List[str]) -> Dict[str, bool]:
@@ -340,6 +598,76 @@ def _build_received_pattern(
     return ("|".join(parts) if len(parts) > 0 else "none", recv_any_m0, recv_any_m1)
 
 
+_HISTORY_INTERVENTION_CHOICES = (
+    "none",
+    "zero_temporal",
+    "clamp_temporal_high",
+    "clamp_temporal_low",
+    "zero_last_coop",
+    "zero_last_action",
+    "zero_ewma",
+    "clamp_ewma_high",
+)
+
+
+def _canonical_history_intervention(history_intervention: str) -> str:
+    mode = str(history_intervention or "none").strip().lower()
+    if mode == "":
+        mode = "none"
+    if mode not in _HISTORY_INTERVENTION_CHOICES:
+        raise ValueError(
+            "unknown history_intervention="
+            f"{history_intervention!r}; expected one of: {','.join(_HISTORY_INTERVENTION_CHOICES)}"
+        )
+    return mode
+
+
+def _apply_history_intervention(
+    obs: np.ndarray,
+    wrapper: ObservationWrapper,
+    history_intervention: str,
+) -> np.ndarray:
+    mode = _canonical_history_intervention(history_intervention)
+    out = np.asarray(obs, dtype=np.float32).copy()
+    if mode == "none":
+        return out
+    if mode == "zero_temporal":
+        out[wrapper.temporal_feature_slice] = 0.0
+        return out
+    if mode == "clamp_temporal_high":
+        out[wrapper.last_coop_idx] = 1.0
+        out[wrapper.own_last_action_idx] = 1.0
+        out[wrapper.ewma_coop_idx] = 1.0
+        return out
+    if mode == "clamp_temporal_low":
+        out[wrapper.last_coop_idx] = 0.0
+        out[wrapper.own_last_action_idx] = 0.0
+        out[wrapper.ewma_coop_idx] = 0.0
+        return out
+    if mode == "zero_last_coop":
+        out[wrapper.last_coop_idx] = 0.0
+        return out
+    if mode == "zero_last_action":
+        out[wrapper.own_last_action_idx] = 0.0
+        return out
+    if mode == "zero_ewma":
+        out[wrapper.ewma_coop_idx] = 0.0
+        return out
+    if mode == "clamp_ewma_high":
+        out[wrapper.ewma_coop_idx] = 1.0
+        return out
+    raise AssertionError(f"unhandled history_intervention={mode}")
+
+
+def _history_feature_record(obs: np.ndarray, wrapper: ObservationWrapper) -> Dict[str, float]:
+    arr = np.asarray(obs, dtype=np.float32).reshape(-1)
+    return {
+        "obs_last_coop_fraction": float(arr[wrapper.last_coop_idx]),
+        "obs_own_last_action": float(arr[wrapper.own_last_action_idx]),
+        "obs_ewma_coop": float(arr[wrapper.ewma_coop_idx]),
+    }
+
+
 def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
     if len(trace_rows) == 0:
         return []
@@ -358,6 +686,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             int(row["eval_seed"]),
             row["eval_policy"],
             row["ablation"],
+            row.get("history_intervention", "none"),
             row.get("sender_remap", "none"),
             row["cross_play"],
             sender_id,
@@ -373,7 +702,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
 
     out = []
     for key, acc in sorted(by_fhat.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, sender_id, fhat_bin = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, history_intervention, sender_remap, cross_play, sender_id, fhat_bin = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -383,6 +712,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "history_intervention": history_intervention,
                 "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "sender_id": sender_id,
@@ -394,7 +724,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             }
         )
     for key, acc in sorted(by_action.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, sender_id, action = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, history_intervention, sender_remap, cross_play, sender_id, action = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -404,6 +734,7 @@ def _derive_sender_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "history_intervention": history_intervention,
                 "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "sender_id": sender_id,
@@ -438,6 +769,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             int(row["eval_seed"]),
             row["eval_policy"],
             row["ablation"],
+            row.get("history_intervention", "none"),
             row.get("sender_remap", "none"),
             row["cross_play"],
         )
@@ -466,7 +798,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
 
     out = []
     for key, acc in sorted(by_pattern.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, recv_pattern, fhat_bin = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, history_intervention, sender_remap, cross_play, recv_pattern, fhat_bin = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -476,6 +808,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "history_intervention": history_intervention,
                 "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "receiver_id": "all_agents",
@@ -490,7 +823,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             }
         )
     for key, acc in sorted(by_any_token.items()):
-        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, sender_remap, cross_play, any_token, fhat_bin = key
+        checkpoint, condition, train_seed, eval_seed, eval_policy, ablation, history_intervention, sender_remap, cross_play, any_token, fhat_bin = key
         n_obs = int(acc["n_obs"])
         out.append(
             {
@@ -500,6 +833,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "history_intervention": history_intervention,
                 "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "receiver_id": "all_agents",
@@ -521,6 +855,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
             eval_seed,
             eval_policy,
             ablation,
+            history_intervention,
             sender_remap,
             cross_play,
             receiver_id,
@@ -537,6 +872,7 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "eval_seed": int(eval_seed),
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "history_intervention": history_intervention,
                 "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "receiver_id": receiver_id,
@@ -548,6 +884,64 @@ def _derive_receiver_semantics_rows(trace_rows: List[Dict]) -> List[Dict]:
                 "fhat_bin": fhat_bin,
                 "n_obs": n_obs,
                 "p_cooperate": float(acc["coop_sum"] / max(1, n_obs)),
+            }
+        )
+    return out
+
+
+def _sender_causal_summary_rows(
+    sender_causal_acc: Dict[Tuple[str, str, str], Dict[str, float]],
+    *,
+    checkpoint_path: str,
+    condition: str,
+    train_seed: int,
+    eval_seed: int,
+    greedy: bool,
+    ablation_label: str,
+    history_intervention_label: str,
+    sender_remap_label: str,
+    cross_play_label: str,
+    n_agents: int,
+) -> List[Dict]:
+    out: List[Dict] = []
+    for (sender_id, receiver_id, f_key), acc in sorted(
+        sender_causal_acc.items(), key=lambda item: (float(item[0][2]), item[0][0], item[0][1])
+    ):
+        n_obs = max(1, int(acc["n_obs"]))
+        true_f = float(f_key)
+        out.append(
+            {
+                "checkpoint": checkpoint_path,
+                "condition": condition,
+                "train_seed": int(train_seed),
+                "eval_seed": int(eval_seed),
+                "eval_policy": "greedy" if greedy else "sample",
+                "ablation": ablation_label,
+                "history_intervention": history_intervention_label,
+                "sender_remap": sender_remap_label,
+                "cross_play": cross_play_label,
+                "sender_id": str(sender_id),
+                "receiver_id": str(receiver_id),
+                "receiver_is_sender": int(str(sender_id) == str(receiver_id)),
+                "regime": _regime_label(true_f, n_agents=n_agents),
+                "true_f": true_f,
+                "n_obs": int(acc["n_obs"]),
+                "natural_token0_rate": float(acc["natural_token0_n"] / n_obs),
+                "natural_token1_rate": float(acc["natural_token1_n"] / n_obs),
+                "natural_p_cooperate": float(acc["natural_p_cooperate_sum"] / n_obs),
+                "natural_logit_margin": float(acc["natural_logit_margin_sum"] / n_obs),
+                "natural_greedy_cooperate": float(acc["natural_greedy_cooperate_sum"] / n_obs),
+                "p_cooperate_force0": float(acc["p_cooperate_force0_sum"] / n_obs),
+                "p_cooperate_force1": float(acc["p_cooperate_force1_sum"] / n_obs),
+                "delta_p_cooperate_1_minus_0": float(acc["delta_p_cooperate_sum"] / n_obs),
+                "logit_margin_force0": float(acc["logit_margin_force0_sum"] / n_obs),
+                "logit_margin_force1": float(acc["logit_margin_force1_sum"] / n_obs),
+                "delta_logit_margin_1_minus_0": float(acc["delta_logit_margin_sum"] / n_obs),
+                "greedy_cooperate_force0": float(acc["greedy_cooperate_force0_sum"] / n_obs),
+                "greedy_cooperate_force1": float(acc["greedy_cooperate_force1_sum"] / n_obs),
+                "delta_greedy_cooperate_1_minus_0": float(acc["delta_greedy_cooperate_sum"] / n_obs),
+                "action_flip_rate_force0_vs_natural": float(acc["action_flip_force0_n"] / n_obs),
+                "action_flip_rate_force1_vs_natural": float(acc["action_flip_force1_n"] / n_obs),
             }
         )
     return out
@@ -605,7 +999,9 @@ def _eval_checkpoint(
     n_eval_episodes: int,
     eval_seed: int,
     greedy: bool = False,
+    eval_sigmas: Optional[Sequence[float]] = None,
     msg_intervention: str = "none",
+    history_intervention: str = "none",
     mi_null_perms: int = 200,
     mi_alpha: float = 0.05,
     cross_play_checkpoint: str = "",
@@ -613,11 +1009,65 @@ def _eval_checkpoint(
     sender_remap_label: str = "none",
     posterior_strat: bool = False,
     collect_semantics: bool = False,
-) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[Dict], List[Dict]]:
+    collect_sender_causal: bool = False,
+) -> Tuple[List[Dict], List[Dict], List[Dict], List[Dict], List[Dict], List[Dict], List[Dict]]:
     payload = torch.load(checkpoint_path, map_location="cpu")
-    cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature = _build_eval_objects(
-        payload, greedy=greedy
+    ablation_label = str(msg_intervention or "none").strip().lower()
+    history_intervention_label = _canonical_history_intervention(history_intervention)
+    sender_remap_label = str(sender_remap_label or "none").strip().lower() or "none"
+    (
+        cfg,
+        env,
+        wrapper,
+        agents,
+        agent_ids,
+        sender_ids,
+        value_time_feature,
+        msg_agents,
+        cross_play_label,
+    ) = _resolve_eval_objects(
+        payload=payload,
+        greedy=greedy,
+        cross_play_checkpoint=str(cross_play_checkpoint or ""),
+        eval_sigmas=eval_sigmas,
     )
+    sender_shuffle_state: Optional[Dict[str, Dict[str, object]]] = None
+    if ablation_label == "sender_shuffle":
+        sender_shuffle_state = _collect_sender_shuffle_state(
+            cfg=cfg,
+            env=env,
+            wrapper=wrapper,
+            agents=agents,
+            msg_agents=msg_agents,
+            agent_ids=agent_ids,
+            sender_ids=sender_ids,
+            value_time_feature=value_time_feature,
+            n_eval_episodes=int(n_eval_episodes),
+            eval_seed=int(eval_seed),
+            greedy=bool(greedy),
+            history_intervention=history_intervention_label,
+        )
+        try:
+            env.close()
+        except Exception:
+            pass
+        (
+            cfg,
+            env,
+            wrapper,
+            agents,
+            agent_ids,
+            sender_ids,
+            value_time_feature,
+            msg_agents,
+            cross_play_label,
+        ) = _resolve_eval_objects(
+            payload=payload,
+            greedy=greedy,
+            cross_play_checkpoint=str(cross_play_checkpoint or ""),
+            eval_sigmas=eval_sigmas,
+        )
+
     _seed_everything(eval_seed)
 
     n_agents = int(cfg["n_agents"])
@@ -629,62 +1079,7 @@ def _eval_checkpoint(
     f_key_to_idx = {key: idx for idx, key in enumerate(f_keys_sorted)}
     msg_combos = _build_message_combos(vocab_size=vocab_size, n_senders=len(sender_ids))
     mi_rng = np.random.default_rng(int(eval_seed) + 1729)
-    ablation_label = str(msg_intervention or "none").strip().lower()
-    sender_remap_label = str(sender_remap_label or "none").strip().lower() or "none"
-    cross_play_label = "none"
     sender_flip_map = _parse_sender_flip_map(sender_flip_map_json, sender_ids)
-
-    msg_agents = agents
-    cross_play_checkpoint = str(cross_play_checkpoint or "").strip()
-    if cross_play_checkpoint != "":
-        xp_payload = torch.load(cross_play_checkpoint, map_location="cpu")
-        (
-            xp_cfg,
-            xp_env,
-            xp_wrapper,
-            xp_agents,
-            xp_agent_ids,
-            xp_sender_ids,
-            _xp_value_time_feature,
-        ) = _build_eval_objects(xp_payload, greedy=greedy)
-        if int(xp_cfg["n_agents"]) != int(cfg["n_agents"]):
-            raise ValueError(
-                "cross_play mismatch: "
-                f"n_agents primary={cfg['n_agents']} xp={xp_cfg['n_agents']}"
-            )
-        if bool(xp_cfg.get("comm_enabled", False)) != comm_enabled:
-            raise ValueError(
-                "cross_play mismatch: "
-                f"comm_enabled primary={comm_enabled} xp={bool(xp_cfg.get('comm_enabled', False))}"
-            )
-        if int(xp_cfg.get("vocab_size", 2)) != vocab_size:
-            raise ValueError(
-                "cross_play mismatch: "
-                f"vocab_size primary={vocab_size} xp={int(xp_cfg.get('vocab_size', 2))}"
-            )
-        if list(xp_agent_ids) != list(agent_ids):
-            raise ValueError(
-                "cross_play mismatch: "
-                f"agent_ids primary={agent_ids} xp={xp_agent_ids}"
-            )
-        if list(xp_sender_ids) != list(sender_ids):
-            raise ValueError(
-                "cross_play mismatch: "
-                f"sender_ids primary={sender_ids} xp={xp_sender_ids}"
-            )
-        if int(xp_wrapper.obs_dim) != int(wrapper.obs_dim):
-            raise ValueError(
-                "cross_play mismatch: "
-                f"obs_dim primary={wrapper.obs_dim} xp={xp_wrapper.obs_dim}"
-            )
-        msg_agents = xp_agents
-        cross_play_label = os.path.basename(cross_play_checkpoint)
-        try:
-            xp_env.close()
-        except Exception:
-            pass
-    if cross_play_label != "none" and not (comm_enabled and len(sender_ids) > 0):
-        raise ValueError("cross_play_checkpoint requires communication-enabled checkpoints")
 
     regime_acc = defaultdict(
         lambda: {
@@ -719,6 +1114,27 @@ def _eval_checkpoint(
     policy_entropy = {sender_id: [] for sender_id in sender_ids}
     posterior_records = []
     trace_rows: List[Dict] = []
+    sender_causal_acc = defaultdict(
+        lambda: {
+            "n_obs": 0,
+            "natural_token0_n": 0,
+            "natural_token1_n": 0,
+            "natural_p_cooperate_sum": 0.0,
+            "natural_logit_margin_sum": 0.0,
+            "natural_greedy_cooperate_sum": 0.0,
+            "p_cooperate_force0_sum": 0.0,
+            "p_cooperate_force1_sum": 0.0,
+            "delta_p_cooperate_sum": 0.0,
+            "logit_margin_force0_sum": 0.0,
+            "logit_margin_force1_sum": 0.0,
+            "delta_logit_margin_sum": 0.0,
+            "greedy_cooperate_force0_sum": 0.0,
+            "greedy_cooperate_force1_sum": 0.0,
+            "delta_greedy_cooperate_sum": 0.0,
+            "action_flip_force0_n": 0,
+            "action_flip_force1_n": 0,
+        }
+    )
 
     with torch.no_grad():
         for _ in range(n_eval_episodes):
@@ -730,9 +1146,14 @@ def _eval_checkpoint(
 
             while (not done) and (steps < T):
                 aug_obs = {
-                    agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
+                    agent_id: _apply_history_intervention(
+                        wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages),
+                        wrapper=wrapper,
+                        history_intervention=history_intervention_label,
+                    )
                     for agent_id in agent_ids
                 }
+                current_true_f = float(_as_float(env.current_multiplier))
 
                 proposed = {}
                 if comm_enabled and len(sender_ids) > 0:
@@ -769,6 +1190,7 @@ def _eval_checkpoint(
                         wrapper=wrapper,
                         sender_ids=sender_ids,
                         vocab_size=vocab_size,
+                        sender_shuffle_state=sender_shuffle_state,
                     )
                     delivered = _apply_sender_flip_map(
                         delivered=delivered,
@@ -777,7 +1199,11 @@ def _eval_checkpoint(
                     )
                     current_messages = delivered
                     aug_obs = {
-                        agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
+                        agent_id: _apply_history_intervention(
+                            wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages),
+                            wrapper=wrapper,
+                            history_intervention=history_intervention_label,
+                        )
                         for agent_id in agent_ids
                     }
                     if force_zero_message_slice:
@@ -786,11 +1212,17 @@ def _eval_checkpoint(
                             aug_obs[agent_id][msg_start:] = 0.0
 
                 intended_actions = {}
+                policy_stats_by_agent = {}
+                history_features_by_agent = {}
                 f_hat_by_agent = {
                     agent_id: _extract_f_hat(raw_obs[agent_id]) for agent_id in agent_ids
                 }
                 t_frac = float(steps) / float(max(1, T - 1))
                 for agent_id in agent_ids:
+                    history_features_by_agent[agent_id] = _history_feature_record(
+                        aug_obs[agent_id],
+                        wrapper=wrapper,
+                    )
                     value_obs = (
                         np.concatenate(
                             [aug_obs[agent_id], np.array([t_frac], dtype=np.float32)], axis=0
@@ -799,20 +1231,27 @@ def _eval_checkpoint(
                         else aug_obs[agent_id]
                     )
                     if greedy:
-                        obs_t = torch.tensor(
-                            aug_obs[agent_id],
-                            dtype=torch.float32,
-                            device=agents[agent_id].action_actor.net[0].weight.device,
+                        stats = _binary_action_policy_stats(agents[agent_id], aug_obs[agent_id])
+                        probs_with = np.array(
+                            [1.0 - float(stats["p_cooperate"]), float(stats["p_cooperate"])],
+                            dtype=np.float64,
                         )
-                        logits = agents[agent_id].action_actor(obs_t)
-                        probs_with = torch.softmax(logits, dim=-1).detach().cpu().numpy()
-                        action = int(torch.argmax(logits).item())
+                        action = int(stats["greedy_action"])
                     else:
                         action, _lp, _value, _ent, _probs = agents[agent_id].sample_action(
                             aug_obs[agent_id], value_obs=value_obs
                         )
                         probs_with = _probs.detach().cpu().numpy()
+                        stats = {
+                            "p_cooperate": float(probs_with[1]),
+                            "logit_margin": float(
+                                np.log(np.maximum(probs_with[1], 1e-12))
+                                - np.log(np.maximum(probs_with[0], 1e-12))
+                            ),
+                            "greedy_action": int(np.argmax(probs_with)),
+                        }
                     intended_actions[agent_id] = int(action)
+                    policy_stats_by_agent[agent_id] = stats
                     if comm_enabled and len(sender_ids) > 0:
                         probs_marginal = _expected_action_dist_under_marginals(
                             agent=agents[agent_id],
@@ -833,6 +1272,78 @@ def _eval_checkpoint(
                             )
                         )
                         responsiveness[agent_id].append(max(0.0, kl))
+
+                if (
+                    collect_sender_causal
+                    and comm_enabled
+                    and len(sender_ids) > 0
+                    and current_messages is not None
+                    and int(vocab_size) >= 2
+                ):
+                    for sender_id in sender_ids:
+                        natural_token = int(current_messages.get(sender_id, 0))
+                        edited_messages = {
+                            0: dict(current_messages),
+                            1: dict(current_messages),
+                        }
+                        edited_messages[0][sender_id] = 0
+                        edited_messages[1][sender_id] = 1
+                        for receiver_id in agent_ids:
+                            natural_stats = policy_stats_by_agent[receiver_id]
+                            forced_stats = {}
+                            for forced_token in (0, 1):
+                                if natural_token == forced_token:
+                                    forced_stats[forced_token] = natural_stats
+                                    continue
+                                edited_obs = wrapper.build_obs(
+                                    receiver_id,
+                                    raw_obs[receiver_id],
+                                    edited_messages[forced_token],
+                                )
+                                edited_obs = _apply_history_intervention(
+                                    edited_obs,
+                                    wrapper=wrapper,
+                                    history_intervention=history_intervention_label,
+                                )
+                                forced_stats[forced_token] = _binary_action_policy_stats(
+                                    agents[receiver_id], edited_obs
+                                )
+                            key = (str(sender_id), str(receiver_id), f"{float(current_true_f):.3f}")
+                            acc = sender_causal_acc[key]
+                            acc["n_obs"] += 1
+                            if natural_token == 0:
+                                acc["natural_token0_n"] += 1
+                            elif natural_token == 1:
+                                acc["natural_token1_n"] += 1
+                            acc["natural_p_cooperate_sum"] += float(natural_stats["p_cooperate"])
+                            acc["natural_logit_margin_sum"] += float(natural_stats["logit_margin"])
+                            acc["natural_greedy_cooperate_sum"] += float(
+                                int(natural_stats["greedy_action"]) == 1
+                            )
+                            for forced_token in (0, 1):
+                                stats = forced_stats[forced_token]
+                                acc[f"p_cooperate_force{forced_token}_sum"] += float(
+                                    stats["p_cooperate"]
+                                )
+                                acc[f"logit_margin_force{forced_token}_sum"] += float(
+                                    stats["logit_margin"]
+                                )
+                                acc[f"greedy_cooperate_force{forced_token}_sum"] += float(
+                                    int(stats["greedy_action"]) == 1
+                                )
+                                if int(stats["greedy_action"]) != int(
+                                    natural_stats["greedy_action"]
+                                ):
+                                    acc[f"action_flip_force{forced_token}_n"] += 1
+                            acc["delta_p_cooperate_sum"] += float(
+                                forced_stats[1]["p_cooperate"] - forced_stats[0]["p_cooperate"]
+                            )
+                            acc["delta_logit_margin_sum"] += float(
+                                forced_stats[1]["logit_margin"] - forced_stats[0]["logit_margin"]
+                            )
+                            acc["delta_greedy_cooperate_sum"] += float(
+                                int(forced_stats[1]["greedy_action"]) == 1
+                            ) - float(int(forced_stats[0]["greedy_action"]) == 1)
 
                 raw_next, rewards, done, infos = env.step(intended_actions)
                 executed_actions = infos.get("executed_actions", intended_actions)
@@ -895,6 +1406,7 @@ def _eval_checkpoint(
                                 "checkpoint": checkpoint_path,
                                 "eval_policy": "greedy" if greedy else "sample",
                                 "msg_intervention": ablation_label,
+                                "history_intervention": history_intervention_label,
                                 "sender_remap": sender_remap_label,
                                 "cross_play": cross_play_label,
                                 "true_f": float(true_f),
@@ -917,6 +1429,7 @@ def _eval_checkpoint(
                             "eval_seed": int(eval_seed),
                             "eval_policy": "greedy" if greedy else "sample",
                             "ablation": ablation_label,
+                            "history_intervention": history_intervention_label,
                             "sender_remap": sender_remap_label,
                             "cross_play": cross_play_label,
                             "episode": int(_),
@@ -936,6 +1449,7 @@ def _eval_checkpoint(
                             "recv_any_m1": int(recv_any_m1),
                             "recv_pattern": recv_pattern,
                         }
+                        row.update(history_features_by_agent[agent_id])
                         for sender_id in sender_ids:
                             row[_delivered_msg_key(sender_id)] = (
                                 int(current_messages.get(sender_id, 0))
@@ -959,6 +1473,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "history_intervention": history_intervention_label,
                 "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "regime",
@@ -998,6 +1513,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "history_intervention": history_intervention_label,
                 "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "f_value",
@@ -1037,6 +1553,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "history_intervention": history_intervention_label,
                 "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "comm",
@@ -1090,6 +1607,7 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "history_intervention": history_intervention_label,
                 "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "comm",
@@ -1116,6 +1634,8 @@ def _eval_checkpoint(
                 "eval_seed": eval_seed,
                 "eval_policy": "greedy" if greedy else "sample",
                 "ablation": ablation_label,
+                "history_intervention": history_intervention_label,
+                "sender_remap": sender_remap_label,
                 "cross_play": cross_play_label,
                 "scope": "comm",
                 "key": "all_senders",
@@ -1145,6 +1665,7 @@ def _eval_checkpoint(
                     "eval_seed": eval_seed,
                     "eval_policy": "greedy" if greedy else "sample",
                     "ablation": ablation_label,
+                    "history_intervention": history_intervention_label,
                     "sender_remap": sender_remap_label,
                     "cross_play": cross_play_label,
                     "scope": "comm",
@@ -1168,6 +1689,7 @@ def _eval_checkpoint(
                         "eval_seed": eval_seed,
                         "eval_policy": "greedy" if greedy else "sample",
                         "ablation": ablation_label,
+                        "history_intervention": history_intervention_label,
                         "sender_remap": sender_remap_label,
                         "cross_play": cross_play_label,
                         "scope": "comm",
@@ -1192,6 +1714,7 @@ def _eval_checkpoint(
                     "eval_seed": eval_seed,
                     "eval_policy": "greedy" if greedy else "sample",
                     "ablation": ablation_label,
+                    "history_intervention": history_intervention_label,
                     "sender_remap": sender_remap_label,
                     "cross_play": cross_play_label,
                     "scope": "comm",
@@ -1215,6 +1738,7 @@ def _eval_checkpoint(
                         "eval_seed": eval_seed,
                         "eval_policy": "greedy" if greedy else "sample",
                         "ablation": ablation_label,
+                        "history_intervention": history_intervention_label,
                         "sender_remap": sender_remap_label,
                         "cross_play": cross_play_label,
                         "scope": "comm",
@@ -1248,6 +1772,7 @@ def _eval_checkpoint(
                     "checkpoint": checkpoint_path,
                     "eval_policy": "greedy" if greedy else "sample",
                     "msg_intervention": ablation_label,
+                    "history_intervention": history_intervention_label,
                     "sender_remap": sender_remap_label,
                     "cross_play": cross_play_label,
                     "true_f": true_f,
@@ -1262,6 +1787,23 @@ def _eval_checkpoint(
     receiver_semantics_rows = (
         _derive_receiver_semantics_rows(trace_rows) if collect_semantics else []
     )
+    sender_causal_rows = (
+        _sender_causal_summary_rows(
+            sender_causal_acc,
+            checkpoint_path=checkpoint_path,
+            condition=condition,
+            train_seed=train_seed,
+            eval_seed=eval_seed,
+            greedy=greedy,
+            ablation_label=ablation_label,
+            history_intervention_label=history_intervention_label,
+            sender_remap_label=sender_remap_label,
+            cross_play_label=cross_play_label,
+            n_agents=n_agents,
+        )
+        if collect_sender_causal
+        else []
+    )
     return (
         rows,
         comm_rows,
@@ -1269,13 +1811,13 @@ def _eval_checkpoint(
         trace_rows,
         sender_semantics_rows,
         receiver_semantics_rows,
+        sender_causal_rows,
     )
 
 
 def _write_csv(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = [
         "checkpoint",
         "condition",
@@ -1284,6 +1826,7 @@ def _write_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "history_intervention",
         "sender_remap",
         "cross_play",
         "scope",
@@ -1296,17 +1839,12 @@ def _write_csv(path: str, rows: List[Dict]):
         "p_coop_given_m0",
         "p_coop_given_m1",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _write_comm_csv(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = [
         "checkpoint",
         "condition",
@@ -1315,6 +1853,7 @@ def _write_comm_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "history_intervention",
         "sender_remap",
         "cross_play",
         "scope",
@@ -1333,23 +1872,19 @@ def _write_comm_csv(path: str, rows: List[Dict]):
         "value_std",
         "n_pairs",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _write_posterior_strat_csv(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = [
         "condition",
         "seed",
         "checkpoint",
         "eval_policy",
         "msg_intervention",
+        "history_intervention",
         "sender_remap",
         "cross_play",
         "true_f",
@@ -1357,17 +1892,12 @@ def _write_posterior_strat_csv(path: str, rows: List[Dict]):
         "n_obs",
         "p_cooperate",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _write_trace_csv(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     delivered_cols = sorted(
         {key for row in rows for key in row.keys() if key.startswith("delivered_msg_")}
     )
@@ -1378,6 +1908,7 @@ def _write_trace_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "history_intervention",
         "sender_remap",
         "cross_play",
         "episode",
@@ -1388,23 +1919,21 @@ def _write_trace_csv(path: str, rows: List[Dict]):
         "action",
         "reward",
         "round_welfare",
+        "obs_last_coop_fraction",
+        "obs_own_last_action",
+        "obs_ewma_coop",
         "own_sent_msg",
         *delivered_cols,
         "recv_any_m0",
         "recv_any_m1",
         "recv_pattern",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _write_sender_semantics_csv(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = [
         "checkpoint",
         "condition",
@@ -1412,6 +1941,7 @@ def _write_sender_semantics_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "history_intervention",
         "sender_remap",
         "cross_play",
         "sender_id",
@@ -1421,17 +1951,12 @@ def _write_sender_semantics_csv(path: str, rows: List[Dict]):
         "n_obs",
         "p_message_1",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _write_receiver_semantics_csv(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = [
         "checkpoint",
         "condition",
@@ -1439,6 +1964,7 @@ def _write_receiver_semantics_csv(path: str, rows: List[Dict]):
         "eval_seed",
         "eval_policy",
         "ablation",
+        "history_intervention",
         "sender_remap",
         "cross_play",
         "receiver_id",
@@ -1451,11 +1977,46 @@ def _write_receiver_semantics_csv(path: str, rows: List[Dict]):
         "n_obs",
         "p_cooperate",
     ]
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
+
+
+def _write_sender_causal_csv(path: str, rows: List[Dict]):
+    if len(rows) == 0:
+        return
+    fieldnames = [
+        "checkpoint",
+        "condition",
+        "train_seed",
+        "eval_seed",
+        "eval_policy",
+        "ablation",
+        "history_intervention",
+        "sender_remap",
+        "cross_play",
+        "sender_id",
+        "receiver_id",
+        "receiver_is_sender",
+        "regime",
+        "true_f",
+        "n_obs",
+        "natural_token0_rate",
+        "natural_token1_rate",
+        "natural_p_cooperate",
+        "natural_logit_margin",
+        "natural_greedy_cooperate",
+        "p_cooperate_force0",
+        "p_cooperate_force1",
+        "delta_p_cooperate_1_minus_0",
+        "logit_margin_force0",
+        "logit_margin_force1",
+        "delta_logit_margin_1_minus_0",
+        "greedy_cooperate_force0",
+        "greedy_cooperate_force1",
+        "delta_greedy_cooperate_1_minus_0",
+        "action_flip_rate_force0_vs_natural",
+        "action_flip_rate_force1_vs_natural",
+    ]
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _condition_summary(rows: List[Dict]) -> List[Dict]:
@@ -1468,6 +2029,7 @@ def _condition_summary(rows: List[Dict]) -> List[Dict]:
             row["key"],
             row.get("eval_policy", "sample"),
             row.get("ablation", "none"),
+            row.get("history_intervention", "none"),
             row.get("sender_remap", "none"),
             row.get("cross_play", "none"),
         )
@@ -1477,7 +2039,15 @@ def _condition_summary(rows: List[Dict]) -> List[Dict]:
         grouped[key]["reward_weighted"] += float(row["avg_reward"]) * n
 
     out = []
-    for (condition, regime, eval_policy, ablation, sender_remap, cross_play), acc in sorted(grouped.items()):
+    for (
+        condition,
+        regime,
+        eval_policy,
+        ablation,
+        history_intervention,
+        sender_remap,
+        cross_play,
+    ), acc in sorted(grouped.items()):
         n = max(1, int(acc["n_rounds"]))
         out.append(
             {
@@ -1485,6 +2055,7 @@ def _condition_summary(rows: List[Dict]) -> List[Dict]:
                 "regime": regime,
                 "eval_policy": eval_policy,
                 "ablation": ablation,
+                "history_intervention": history_intervention,
                 "sender_remap": sender_remap,
                 "cross_play": cross_play,
                 "n_rounds": int(acc["n_rounds"]),
@@ -1501,11 +2072,30 @@ def parse_args():
     p.add_argument("--n_eval_episodes", type=int, default=300)
     p.add_argument("--eval_seed", type=int, default=9001)
     p.add_argument("--greedy", action="store_true")
+    p.add_argument("--eval_sigmas", nargs="*", type=float, default=None)
     p.add_argument(
         "--msg_intervention",
         type=str,
         default="none",
-        choices=["none", "marginal", "zeros", "fixed0", "fixed1", "flip", "uniform", "permute_slots"],
+        choices=[
+            "none",
+            "marginal",
+            "zeros",
+            "fixed0",
+            "fixed1",
+            "flip",
+            "uniform",
+            "indep_random",
+            "public_random",
+            "sender_shuffle",
+            "permute_slots",
+        ],
+    )
+    p.add_argument(
+        "--history_intervention",
+        type=str,
+        default="none",
+        choices=list(_HISTORY_INTERVENTION_CHOICES),
     )
     p.add_argument("--mi_null_perms", type=int, default=200)
     p.add_argument("--mi_alpha", type=float, default=0.05)
@@ -1518,6 +2108,7 @@ def parse_args():
     p.add_argument("--out_trace_csv", type=str, default="")
     p.add_argument("--out_sender_semantics_csv", type=str, default="")
     p.add_argument("--out_receiver_semantics_csv", type=str, default="")
+    p.add_argument("--out_sender_causal_csv", type=str, default="")
     p.add_argument(
         "--out_condition_csv",
         type=str,
@@ -1542,10 +2133,12 @@ def main():
     out_trace_csv = str(args.out_trace_csv or "").strip()
     out_sender_semantics_csv = str(args.out_sender_semantics_csv or "").strip()
     out_receiver_semantics_csv = str(args.out_receiver_semantics_csv or "").strip()
+    out_sender_causal_csv = str(args.out_sender_causal_csv or "").strip()
     collect_semantics = any(
         len(val) > 0
         for val in (out_trace_csv, out_sender_semantics_csv, out_receiver_semantics_csv)
     )
+    collect_sender_causal = len(out_sender_causal_csv) > 0
     if collect_semantics:
         root, ext = os.path.splitext(args.out_csv)
         if out_trace_csv == "":
@@ -1554,6 +2147,10 @@ def main():
             out_sender_semantics_csv = f"{root}_sender_semantics{ext or '.csv'}"
         if out_receiver_semantics_csv == "":
             out_receiver_semantics_csv = f"{root}_receiver_semantics{ext or '.csv'}"
+    if collect_sender_causal:
+        root, ext = os.path.splitext(args.out_csv)
+        if out_sender_causal_csv == "":
+            out_sender_causal_csv = f"{root}_sender_causal{ext or '.csv'}"
     posterior_out_csv = ""
     if bool(args.posterior_strat):
         root, ext = os.path.splitext(args.out_csv)
@@ -1565,15 +2162,18 @@ def main():
     all_trace_rows: List[Dict] = []
     all_sender_semantics_rows: List[Dict] = []
     all_receiver_semantics_rows: List[Dict] = []
+    all_sender_causal_rows: List[Dict] = []
     for idx, ckpt in enumerate(ckpts):
         run_seed = int(args.eval_seed + idx)
         print(f"[eval] {idx + 1}/{len(ckpts)} -> {ckpt} (seed={run_seed})")
-        rows, comm_rows, posterior_rows, trace_rows, sender_semantics_rows, receiver_semantics_rows = _eval_checkpoint(
+        rows, comm_rows, posterior_rows, trace_rows, sender_semantics_rows, receiver_semantics_rows, sender_causal_rows = _eval_checkpoint(
             checkpoint_path=ckpt,
             n_eval_episodes=args.n_eval_episodes,
             eval_seed=run_seed,
             greedy=bool(args.greedy),
+            eval_sigmas=args.eval_sigmas,
             msg_intervention=str(args.msg_intervention),
+            history_intervention=str(args.history_intervention),
             mi_null_perms=int(args.mi_null_perms),
             mi_alpha=float(args.mi_alpha),
             cross_play_checkpoint=str(args.cross_play_checkpoint or ""),
@@ -1581,6 +2181,7 @@ def main():
             sender_remap_label=str(args.sender_remap_label or "none"),
             posterior_strat=bool(args.posterior_strat),
             collect_semantics=collect_semantics,
+            collect_sender_causal=collect_sender_causal,
         )
         all_rows.extend(rows)
         all_comm_rows.extend(comm_rows)
@@ -1588,6 +2189,7 @@ def main():
         all_trace_rows.extend(trace_rows)
         all_sender_semantics_rows.extend(sender_semantics_rows)
         all_receiver_semantics_rows.extend(receiver_semantics_rows)
+        all_sender_causal_rows.extend(sender_causal_rows)
 
     _write_csv(args.out_csv, all_rows)
     _write_comm_csv(out_comm_csv, all_comm_rows)
@@ -1597,26 +2199,25 @@ def main():
         _write_trace_csv(out_trace_csv, all_trace_rows)
         _write_sender_semantics_csv(out_sender_semantics_csv, all_sender_semantics_rows)
         _write_receiver_semantics_csv(out_receiver_semantics_csv, all_receiver_semantics_rows)
+    if collect_sender_causal:
+        _write_sender_causal_csv(out_sender_causal_csv, all_sender_causal_rows)
     cond_rows = _condition_summary(all_rows)
-    os.makedirs(os.path.dirname(args.out_condition_csv), exist_ok=True)
-    with open(args.out_condition_csv, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "condition",
-                "regime",
-                "eval_policy",
-                "ablation",
-                "sender_remap",
-                "cross_play",
-                "n_rounds",
-                "coop_rate",
-                "avg_reward",
-            ],
-        )
-        writer.writeheader()
-        for row in cond_rows:
-            writer.writerow(row)
+    atomic_write_rows(
+        args.out_condition_csv,
+        cond_rows,
+        [
+            "condition",
+            "regime",
+            "eval_policy",
+            "ablation",
+            "history_intervention",
+            "sender_remap",
+            "cross_play",
+            "n_rounds",
+            "coop_rate",
+            "avg_reward",
+        ],
+    )
 
     print(f"[eval] rows={len(all_rows)} out={args.out_csv}")
     print(f"[eval] comm_rows={len(all_comm_rows)} out={out_comm_csv}")
@@ -1634,12 +2235,18 @@ def main():
             f"[eval] receiver_semantics_rows={len(all_receiver_semantics_rows)} "
             f"out={out_receiver_semantics_csv}"
         )
+    if collect_sender_causal:
+        print(
+            f"[eval] sender_causal_rows={len(all_sender_causal_rows)} "
+            f"out={out_sender_causal_csv}"
+        )
     print(f"[eval] condition_summary_rows={len(cond_rows)} out={args.out_condition_csv}")
     for row in cond_rows:
         print(
             "[summary] "
             f"{row['condition']} {row['regime']} "
-            f"[{row['eval_policy']}:{row['ablation']}:{row['sender_remap']}:{row['cross_play']}] "
+            f"[{row['eval_policy']}:{row['ablation']}:{row['history_intervention']}:"
+            f"{row['sender_remap']}:{row['cross_play']}] "
             f"coop={row['coop_rate']:.3f} reward={row['avg_reward']:.3f} "
             f"n_rounds={row['n_rounds']}"
         )

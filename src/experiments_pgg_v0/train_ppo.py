@@ -8,8 +8,9 @@ import os
 import random
 import subprocess
 import sys
+from collections import deque
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Deque, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -55,6 +56,7 @@ class TrainConfig:
     vocab_size: int = 2
     msg_dropout: float = 0.1
     msg_training_intervention: str = "none"
+    msg_training_history_len: int = 4096
     episode_offset: int = 0
     schedule_total_episodes: int = 0
 
@@ -269,6 +271,7 @@ def _apply_training_message_intervention(
     intervention: str,
     delivered: Dict[str, int],
     vocab_size: int,
+    sender_history: Optional[Dict[str, Deque[int]]] = None,
 ) -> Dict[str, int]:
     mode = str(intervention or "none").strip().lower()
     out = {sender_id: int(msg) for sender_id, msg in delivered.items()}
@@ -288,10 +291,32 @@ def _apply_training_message_intervention(
         if int(vocab_size) < 2:
             raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
         return {sender_id: 1 for sender_id in out.keys()}
+    if mode == "sender_shuffle":
+        if sender_history is None:
+            raise ValueError(
+                "msg_training_intervention=sender_shuffle requires sender_history"
+            )
+        shuffled = {}
+        for sender_id, msg in out.items():
+            history = sender_history.get(sender_id)
+            if history is None or len(history) == 0:
+                shuffled[sender_id] = int(msg)
+                continue
+            idx = int(np.random.randint(0, len(history)))
+            shuffled[sender_id] = int(history[idx])
+        return shuffled
     raise ValueError(
         "unknown msg_training_intervention="
-        f"{intervention!r}; expected one of: none,uniform,public_random,fixed0,fixed1"
+        f"{intervention!r}; expected one of: none,uniform,public_random,fixed0,fixed1,sender_shuffle"
     )
+
+
+def _update_training_message_history(
+    sender_history: Dict[str, Deque[int]],
+    natural_messages: Dict[str, int],
+) -> None:
+    for sender_id, msg in natural_messages.items():
+        sender_history.setdefault(str(sender_id), deque()).append(int(msg))
 
 
 def _set_agents_lr(agents: Dict[str, PPOAgentV2], lr_value: float):
@@ -446,6 +471,12 @@ def _single_run(cfg: TrainConfig):
     )
     agents = _build_agents(cfg, obs_dim=wrapper.obs_dim, sender_ids=sender_ids)
     _maybe_load_agents(agents=agents, init_ckpt=cfg.init_ckpt)
+    sender_history: Dict[str, Deque[int]] = {}
+    if cfg.comm_enabled and str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+        sender_history = {
+            sender_id: deque(maxlen=max(1, int(cfg.msg_training_history_len)))
+            for sender_id in sender_ids
+        }
     if cfg.lr_schedule == "linear":
         _set_agents_lr(agents, cfg.lr)
     ppo = PPOTrainer(
@@ -592,11 +623,20 @@ def _single_run(cfg: TrainConfig):
                         wrapper.update_msg_marginals(sender_id, msg)
                     current_messages = dropped
                 else:
-                    delivered = _apply_training_message_intervention(
-                        intervention=cfg.msg_training_intervention,
-                        delivered=dropped,
-                        vocab_size=cfg.vocab_size,
-                    )
+                    if str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+                        delivered = _apply_training_message_intervention(
+                            intervention=cfg.msg_training_intervention,
+                            delivered=dropped,
+                            vocab_size=cfg.vocab_size,
+                            sender_history=sender_history,
+                        )
+                        _update_training_message_history(sender_history, dropped)
+                    else:
+                        delivered = _apply_training_message_intervention(
+                            intervention=cfg.msg_training_intervention,
+                            delivered=dropped,
+                            vocab_size=cfg.vocab_size,
+                        )
                     for sender_id, msg in delivered.items():
                         wrapper.update_msg_marginals(sender_id, msg)
                     current_messages = delivered
@@ -1164,8 +1204,9 @@ def parse_args():
         "--msg_training_intervention",
         type=str,
         default="none",
-        choices=["none", "uniform", "public_random", "fixed0", "fixed1"],
+        choices=["none", "uniform", "public_random", "fixed0", "fixed1", "sender_shuffle"],
     )
+    parser.add_argument("--msg_training_history_len", type=int, default=4096)
     parser.add_argument("--episode_offset", type=int, default=0)
     parser.add_argument("--schedule_total_episodes", type=int, default=0)
     parser.add_argument("--hidden_size", type=int, default=64)
@@ -1254,6 +1295,7 @@ def args_to_config(args) -> TrainConfig:
         vocab_size=args.vocab_size,
         msg_dropout=args.msg_dropout,
         msg_training_intervention=args.msg_training_intervention,
+        msg_training_history_len=args.msg_training_history_len,
         episode_offset=args.episode_offset,
         schedule_total_episodes=args.schedule_total_episodes,
         hidden_size=args.hidden_size,
@@ -1324,6 +1366,8 @@ def args_to_config(args) -> TrainConfig:
         )
     if str(cfg.msg_training_intervention) == "fixed1" and int(cfg.vocab_size) < 2:
         raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
+    if int(cfg.msg_training_history_len) <= 0:
+        raise ValueError("msg_training_history_len must be > 0")
     if int(cfg.episode_offset) < 0:
         raise ValueError("episode_offset must be >= 0")
     if int(cfg.schedule_total_episodes) < 0:

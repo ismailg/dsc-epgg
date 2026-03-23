@@ -19,6 +19,13 @@ Example Outcome:
 - Under **asymmetric uncertainty**, agents may exploit communication.  
 - Agents trained across multiple incentive environments learn richer strategies that **generalize** better to unseen settings.
 
+## Current Data Location Guide
+
+For the current local run roots, checkpoint/eval paths, and legacy-path traps, start with:
+
+- [`DATA_MAP.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/DATA_MAP.md)
+- [`outputs/data_catalog/DATA_CATALOG.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/data_catalog/DATA_CATALOG.md)
+
 ## Project Features & Repository Structure
 
 - **Environments**: Extended Public Goods Game (EPGG) with cooperative/mixed/competitive incentives.    

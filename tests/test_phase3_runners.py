@@ -1,14 +1,96 @@
 import csv
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+import torch
+
+from src.analysis.checkpoint_artifacts import infer_absolute_milestones
+from src.analysis.run_phase3_checkpoint_suite import _checkpoint_path as suite_checkpoint_path
+from src.analysis.run_phase3_crossplay_matrix import _checkpoint_path as crossplay_checkpoint_path
+from src.analysis.run_phase3_sender_causal_suite import _checkpoint_path as sender_checkpoint_path
 from src.analysis.summarize_phase3_channel_controls import _collect_mode_rows
+from src.analysis.validate_checkpoint_suite_outputs import validate_checkpoint_suite_outputs
 from src.experiments_pgg_v0.train_ppo import minimal_test_config, train
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _write_fake_ckpt(path: Path, episode_offset: int, n_episodes: int):
+    payload = {"config": {"episode_offset": episode_offset, "n_episodes": n_episodes}}
+    torch.save(payload, path)
+
+
+@pytest.mark.parametrize(
+    "resolver",
+    [suite_checkpoint_path, crossplay_checkpoint_path, sender_checkpoint_path],
+)
+def test_checkpoint_path_uses_absolute_episode_under_continuation(tmp_path: Path, resolver):
+    final_ckpt = tmp_path / "cond1_seed111.pt"
+    mid_ckpt = tmp_path / "cond1_seed111_ep50000.pt"
+    _write_fake_ckpt(final_ckpt, episode_offset=50000, n_episodes=100000)
+    _write_fake_ckpt(mid_ckpt, episode_offset=50000, n_episodes=100000)
+
+    assert resolver(str(tmp_path), "cond1", 111, 100000) == str(mid_ckpt)
+    assert resolver(str(tmp_path), "cond1", 111, 150000) == str(final_ckpt)
+
+    with pytest.raises(FileNotFoundError):
+        resolver(str(tmp_path), "cond1", 111, 50000)
+
+
+def test_infer_absolute_milestones_deduplicates_final_and_intermediate(tmp_path: Path):
+    _write_fake_ckpt(tmp_path / "cond1_seed111.pt", episode_offset=50000, n_episodes=100000)
+    _write_fake_ckpt(tmp_path / "cond1_seed111_ep50000.pt", episode_offset=50000, n_episodes=100000)
+    _write_fake_ckpt(tmp_path / "cond1_seed111_ep100000.pt", episode_offset=50000, n_episodes=100000)
+    assert infer_absolute_milestones(str(tmp_path), condition="cond1", seeds=[111]) == [100000, 150000]
+
+
+def test_validate_checkpoint_suite_outputs_rejects_header_only_raw_csv(tmp_path: Path):
+    suite_dir = tmp_path / "suite"
+    raw_dir = suite_dir / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = suite_dir / "checkpoint_suite_manifest.json"
+    payload = [
+        {
+            "name": "cond1_seed111_ep100000_none",
+            "checkpoint": "dummy.pt",
+            "episode": 100000,
+            "intervention": "none",
+            "out_csv": str(raw_dir / "cond1_seed111_ep100000_none.csv"),
+            "out_comm_csv": str(raw_dir / "cond1_seed111_ep100000_none_comm.csv"),
+            "out_condition_csv": str(raw_dir / "cond1_seed111_ep100000_none_condition.csv"),
+            "out_trace_csv": "",
+            "out_sender_csv": "",
+            "out_receiver_csv": "",
+            "out_posterior_csv": "",
+        }
+    ]
+    manifest_path.write_text(json.dumps(payload), encoding="utf-8")
+    for path in [
+        raw_dir / "cond1_seed111_ep100000_none.csv",
+        raw_dir / "cond1_seed111_ep100000_none_comm.csv",
+        raw_dir / "cond1_seed111_ep100000_none_condition.csv",
+    ]:
+        path.write_text("a,b\n", encoding="utf-8")
+    for path in [
+        suite_dir / "checkpoint_suite_main.csv",
+        suite_dir / "checkpoint_suite_comm.csv",
+        suite_dir / "checkpoint_suite_condition.csv",
+    ]:
+        path.write_text("a,b\n", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        validate_checkpoint_suite_outputs(
+            manifest_path,
+            suite_dir=suite_dir,
+            expected_seeds=[111],
+            expected_episodes=[100000],
+            expected_interventions=["none"],
+        )
 
 
 def _make_checkpoint(tmp_path: Path, condition: str, seed: int, comm_enabled: bool) -> Path:
@@ -54,7 +136,8 @@ def test_checkpoint_suite_runner_aggregates_outputs(tmp_path: Path):
             "2",
             "--interventions",
             "none",
-            "fixed0",
+            "public_random",
+            "sender_shuffle",
             "--n_eval_episodes",
             "1",
             "--max_workers",
@@ -73,6 +156,48 @@ def test_checkpoint_suite_runner_aggregates_outputs(tmp_path: Path):
     assert len(rows) > 0
     assert {"1", "2"} <= {row["checkpoint_episode"] for row in rows}
     assert {"comm", "baseline"} <= {row["suite_kind"] for row in rows}
+
+
+def test_checkpoint_suite_runner_passes_history_intervention(tmp_path: Path):
+    _make_checkpoint(tmp_path, "cond1", 112, comm_enabled=True)
+    _make_checkpoint(tmp_path, "cond2", 112, comm_enabled=False)
+    out_dir = tmp_path / "suite_hist_out"
+    env = os.environ.copy()
+    env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.analysis.run_phase3_checkpoint_suite",
+            "--checkpoint_dir",
+            str(tmp_path),
+            "--out_dir",
+            str(out_dir),
+            "--seeds",
+            "112",
+            "--milestones",
+            "1",
+            "--interventions",
+            "none",
+            "--history_intervention",
+            "clamp_temporal_high",
+            "--n_eval_episodes",
+            "1",
+            "--max_workers",
+            "1",
+        ],
+        cwd=str(REPO_ROOT),
+        env=env,
+        check=True,
+    )
+    main_csv = out_dir / "checkpoint_suite_main.csv"
+    assert main_csv.exists()
+    with open(main_csv, "r", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+    assert len(rows) > 0
+    assert {row["history_intervention"] for row in rows} == {"clamp_temporal_high"}
+    raw_names = {path.name for path in (out_dir / "raw").glob("*.csv")}
+    assert any("_hist_clamp_temporal_high.csv" in name for name in raw_names)
 
 
 def test_crossplay_runner_aggregates_matrix(tmp_path: Path):
@@ -242,7 +367,8 @@ def test_trimmed_eval_runner_orchestrates_suite_and_crossplay(tmp_path: Path):
             "2",
             "--interventions",
             "none",
-            "fixed0",
+            "public_random",
+            "sender_shuffle",
             "--crossplay_sender_milestones",
             "1",
             "--crossplay_receiver_milestones",

@@ -2,24 +2,24 @@
 % Run: python paper_data.py --gen-defs
 
 % Table 1: comm vs no-comm cooperation rates
-\def\TIcommTFFk{0.809 \pm 0.030}  % comm f=3.500 50k
-\def\TIncTFFk{0.505 \pm 0.019}  % no_comm f=3.500 50k
-\def\TIgapTFFk{\mathbf{+0.304}***}  % gap f=3.500 50k  p=0.0000
-\def\TIcommTFHk{0.588 \pm 0.092}  % comm f=3.500 100k
-\def\TIncTFHk{0.431 \pm 0.024}  % no_comm f=3.500 100k
-\def\TIgapTFHk{+0.156*}  % gap f=3.500 100k  p=0.0246
-\def\TIcommTFOfk{0.619 \pm 0.093}  % comm f=3.500 150k
-\def\TIncTFOfk{0.427 \pm 0.029}  % no_comm f=3.500 150k
-\def\TIgapTFOfk{+0.192***}  % gap f=3.500 150k  p=0.0006
-\def\TIcommFVFk{0.799 \pm 0.034}  % comm f=5.000 50k
-\def\TIncFVFk{0.720 \pm 0.061}  % no_comm f=5.000 50k
-\def\TIgapFVFk{+0.079}  % gap f=5.000 50k  p=0.2092
-\def\TIcommFVHk{0.622 \pm 0.096}  % comm f=5.000 100k
-\def\TIncFVHk{0.596 \pm 0.057}  % no_comm f=5.000 100k
-\def\TIgapFVHk{+0.027}  % gap f=5.000 100k  p=0.6690
-\def\TIcommFVOfk{0.657 \pm 0.073}  % comm f=5.000 150k
-\def\TIncFVOfk{0.729 \pm 0.042}  % no_comm f=5.000 150k
-\def\TIgapFVOfk{-0.072}  % gap f=5.000 150k  p=0.4258
+\def\TIcommTFFk{0.775 \pm 0.028}  % comm f=3.500 50k
+\def\TIncTFFk{0.472 \pm 0.012}  % no_comm f=3.500 50k
+\def\TIgapTFFk{\mathbf{+0.303}}  % gap f=3.500 50k  p=0.0001
+\def\TIcommTFHk{0.559 \pm 0.055}  % comm f=3.500 100k
+\def\TIncTFHk{0.421 \pm 0.023}  % no_comm f=3.500 100k
+\def\TIgapTFHk{+0.137}  % gap f=3.500 100k  p=0.0279
+\def\TIcommTFOfk{0.536 \pm 0.038}  % comm f=3.500 150k
+\def\TIncTFOfk{0.450 \pm 0.025}  % no_comm f=3.500 150k
+\def\TIgapTFOfk{+0.086}  % gap f=3.500 150k  p=0.0609
+\def\TIcommFVFk{0.761 \pm 0.032}  % comm f=5.000 50k
+\def\TIncFVFk{0.732 \pm 0.038}  % no_comm f=5.000 50k
+\def\TIgapFVFk{+0.029}  % gap f=5.000 50k  p=0.5427
+\def\TIcommFVHk{0.556 \pm 0.064}  % comm f=5.000 100k
+\def\TIncFVHk{0.649 \pm 0.042}  % no_comm f=5.000 100k
+\def\TIgapFVHk{-0.093}  % gap f=5.000 100k  p=0.2766
+\def\TIcommFVOfk{0.561 \pm 0.041}  % comm f=5.000 150k
+\def\TIncFVOfk{0.800 \pm 0.032}  % no_comm f=5.000 150k
+\def\TIgapFVOfk{-0.240}  % gap f=5.000 150k  p=0.0009
 
 % Table 2: channel controls at 50k
 \def\TIILearned{0.809}  % learned (n=5)
@@ -28,127 +28,199 @@
 \def\TIIPub{0.620}  % public_random (n=3)
 
 % Table 3: continuation controls
-\def\TIIInSeeds{5}  % number of seeds
+\def\TIIInSeeds{15}  % number of seeds
 \def\TIIIsource{same-checkpoint}  % data source type
 \def\TIIIpending{}  % pending note
-\def\TIIILearnedFk{0.809}  % learned 50k f=3.5
-\def\TIIILearnedHk{0.588}  % learned 100k f=3.5
-\def\TIIILearnedOfk{0.619}  % learned 150k f=3.5
-\def\TIIILearnedFkFV{0.799}  % learned 50k f=5.0
-\def\TIIILearnedOfkFV{0.657}  % learned 150k f=5.0
-\def\TIIIIndepFk{0.809}  % indep_random 50k f=3.5
-\def\TIIIIndepHk{0.417}  % indep_random 100k f=3.5
-\def\TIIIIndepOfk{0.392}  % indep_random 150k f=3.5
-\def\TIIIIndepFkFV{0.799}  % indep_random 50k f=5.0
-\def\TIIIIndepOfkFV{0.636}  % indep_random 150k f=5.0
-\def\TIIIPubFk{0.809}  % public_random 50k f=3.5
-\def\TIIIPubHk{0.393}  % public_random 100k f=3.5
-\def\TIIIPubOfk{0.409}  % public_random 150k f=3.5
-\def\TIIIPubFkFV{0.799}  % public_random 50k f=5.0
-\def\TIIIPubOfkFV{0.588}  % public_random 150k f=5.0
-\def\TIIIZeroFk{0.809}  % always_zero 50k f=3.5
-\def\TIIIZeroHk{0.356}  % always_zero 100k f=3.5
-\def\TIIIZeroOfk{0.329}  % always_zero 150k f=3.5
-\def\TIIIZeroFkFV{0.799}  % always_zero 50k f=5.0
-\def\TIIIZeroOfkFV{0.527}  % always_zero 150k f=5.0
-\def\TIIIminOfk{0.329}  % min 150k across modes
-\def\TIIImaxOfk{0.619}  % max 150k across modes
+\def\TIIILearnedFk{0.775 \pm 0.028}  % learned 50k f=3.5
+\def\TIIILearnedHk{0.559 \pm 0.055}  % learned 100k f=3.5
+\def\TIIILearnedOfk{0.536 \pm 0.038}  % learned 150k f=3.5
+\def\TIIILearnedFkFV{0.761 \pm 0.032}  % learned 50k f=5.0
+\def\TIIILearnedOfkFV{0.561 \pm 0.041}  % learned 150k f=5.0
+\def\TIIIIndepFk{0.775 \pm 0.028}  % indep_random 50k f=3.5
+\def\TIIIIndepHk{0.459 \pm 0.028}  % indep_random 100k f=3.5
+\def\TIIIIndepOfk{0.415 \pm 0.019}  % indep_random 150k f=3.5
+\def\TIIIIndepFkFV{0.761 \pm 0.032}  % indep_random 50k f=5.0
+\def\TIIIIndepOfkFV{0.631 \pm 0.044}  % indep_random 150k f=5.0
+\def\TIIIIndepGapOfk{+12.1}  % learned - indep_random gap at 150k (pp)
+\def\TIIIIndepGapOfkCI{[+3.4,\,+21.5]}  % 95% CI for gap (pp)
+\def\TIIIIndepGapOfkP{=0.0189}  % p-value for gap
+\def\TIIIPubFk{0.775 \pm 0.028}  % public_random 50k f=3.5
+\def\TIIIPubHk{0.425 \pm 0.052}  % public_random 100k f=3.5
+\def\TIIIPubOfk{0.399 \pm 0.022}  % public_random 150k f=3.5
+\def\TIIIPubFkFV{0.761 \pm 0.032}  % public_random 50k f=5.0
+\def\TIIIPubOfkFV{0.614 \pm 0.031}  % public_random 150k f=5.0
+\def\TIIIPubGapOfk{+13.7}  % learned - public_random gap at 150k (pp)
+\def\TIIIPubGapOfkCI{[+5.7,\,+21.5]}  % 95% CI for gap (pp)
+\def\TIIIPubGapOfkP{=0.0072}  % p-value for gap
+\def\TIIIZeroFk{0.775 \pm 0.028}  % always_zero 50k f=3.5
+\def\TIIIZeroHk{0.343 \pm 0.048}  % always_zero 100k f=3.5
+\def\TIIIZeroOfk{0.342 \pm 0.036}  % always_zero 150k f=3.5
+\def\TIIIZeroFkFV{0.761 \pm 0.032}  % always_zero 50k f=5.0
+\def\TIIIZeroOfkFV{0.544 \pm 0.043}  % always_zero 150k f=5.0
+\def\TIIIZeroGapOfk{+19.4}  % learned - always_zero gap at 150k (pp)
+\def\TIIIZeroGapOfkCI{[+11.3,\,+29.2]}  % 95% CI for gap (pp)
+\def\TIIIZeroGapOfkP{=0.0002}  % p-value for gap
 
-% Table 4: mute experiment
-\def\TIVcommCoop{0.619}  % comm coop at 150k
-\def\TIVcommWelf{40.76}  % comm welfare
-\def\TIVncCoop{0.427}  % no-comm coop at 150k
-\def\TIVncWelf{33.07}  % no-comm welfare
+% Same-checkpoint sender-shuffle continuation (matched-stat control)
+\def\TSSshufCoopTFOfk{0.446}  % sender-shuffle coop f=3.5 150k
+\def\TSSshufCoopTFOfkSEM{0.028}  % sender-shuffle coop f=3.5 150k SEM
+\def\TSSshufCoopTFOfkPM{0.446 \pm 0.028}  % sender-shuffle coop f=3.5 150k mean ± SEM
+\def\TSSgapTFOfk{+9.0}  % learned - shuffle gap f=3.5 150k (pp)
+\def\TSSgapTFOfkCI{[-1.0,\,+18.7]}  % 95% CI for gap f=3.5 150k (pp)
+\def\TSSgapTFOfkSign{9/15}  % seeds favoring learned at f=3.5 150k
+\def\TSSshufCoopFVOfk{0.720}  % sender-shuffle coop f=5.0 150k
+\def\TSSshufCoopFVOfkSEM{0.038}  % sender-shuffle coop f=5.0 150k SEM
+\def\TSSshufCoopFVOfkPM{0.720 \pm 0.038}  % sender-shuffle coop f=5.0 150k mean ± SEM
+\def\TSSgapFVOfk{-15.9}  % learned - shuffle gap f=5.0 150k (pp)
+\def\TSSgapFVOfkCI{[-29.4,\,-3.4]}  % 95% CI for gap f=5.0 150k (pp)
+\def\TSSgapFVOfkSign{6/15}  % seeds favoring learned at f=5.0 150k
+\def\TIIIminOfk{0.342}  % min 150k across modes
+\def\TIIImaxOfk{0.536}  % max 150k across modes
+
+% Table 4: frozen-checkpoint interventions
+\def\TFRZerosFk{+0.0}  % zeros 50k (pp)
+\def\TFRZerosOfk{+6.1}  % zeros 150k (pp)
+\def\TFRZerosFkSEM{2.4}  % zeros 50k SEM (pp)
+\def\TFRZerosOfkSEM{4.2}  % zeros 150k SEM (pp)
+\def\TFRZerosOfkCI{[-1.2,\,+14.5]}  % zeros 150k 95% CI (pp)
+\def\TFRZerosOfkP{=0.1667}  % zeros 150k p-value
+\def\TFRZerosOfkSign{9/15}  % zeros 150k seeds with natural > intervention
+\def\TFRFixZeroFk{-2.2}  % fixed0 50k (pp)
+\def\TFRFixZeroOfk{+3.0}  % fixed0 150k (pp)
+\def\TFRFixZeroFkSEM{3.2}  % fixed0 50k SEM (pp)
+\def\TFRFixZeroOfkSEM{3.2}  % fixed0 150k SEM (pp)
+\def\TFRFixZeroOfkCI{[-3.1,\,+8.8]}  % fixed0 150k 95% CI (pp)
+\def\TFRFixZeroOfkP{=0.3494}  % fixed0 150k p-value
+\def\TFRFixZeroOfkSign{9/15}  % fixed0 150k seeds with natural > intervention
+\def\TFRPubFk{-2.0}  % public_random 50k (pp)
+\def\TFRPubOfk{+1.6}  % public_random 150k (pp)
+\def\TFRPubFkSEM{1.5}  % public_random 50k SEM (pp)
+\def\TFRPubOfkSEM{1.6}  % public_random 150k SEM (pp)
+\def\TFRPubOfkCI{[-1.3,\,+4.8]}  % public_random 150k 95% CI (pp)
+\def\TFRPubOfkP{=0.3741}  % public_random 150k p-value
+\def\TFRPubOfkSign{7/15}  % public_random 150k seeds with natural > intervention
+\def\TFRIndepFk{-0.3}  % indep_random 50k (pp)
+\def\TFRIndepOfk{+1.6}  % indep_random 150k (pp)
+\def\TFRIndepFkSEM{0.7}  % indep_random 50k SEM (pp)
+\def\TFRIndepOfkSEM{0.7}  % indep_random 150k SEM (pp)
+\def\TFRIndepOfkCI{[+0.4,\,+3.0]}  % indep_random 150k 95% CI (pp)
+\def\TFRIndepOfkP{=0.0286}  % indep_random 150k p-value
+\def\TFRIndepOfkSign{10/15}  % indep_random 150k seeds with natural > intervention
+\def\TFRShuffleFk{-2.9}  % sender_shuffle 50k (pp)
+\def\TFRShuffleOfk{-3.2}  % sender_shuffle 150k (pp)
+\def\TFRShuffleFkSEM{0.9}  % sender_shuffle 50k SEM (pp)
+\def\TFRShuffleOfkSEM{0.6}  % sender_shuffle 150k SEM (pp)
+\def\TFRShuffleOfkCI{[-4.4,\,-2.3]}  % sender_shuffle 150k 95% CI (pp)
+\def\TFRShuffleOfkP{<0.0001}  % sender_shuffle 150k p-value
+\def\TFRShuffleOfkSign{0/15}  % sender_shuffle 150k seeds with natural > intervention
+\def\TFRPermuteFk{-0.4}  % permute_slots 50k (pp)
+\def\TFRPermuteOfk{+1.6}  % permute_slots 150k (pp)
+\def\TFRPermuteFkSEM{0.5}  % permute_slots 50k SEM (pp)
+\def\TFRPermuteOfkSEM{0.7}  % permute_slots 150k SEM (pp)
+\def\TFRPermuteOfkCI{[+0.3,\,+3.1]}  % permute_slots 150k 95% CI (pp)
+\def\TFRPermuteOfkP{=0.0461}  % permute_slots 150k p-value
+\def\TFRPermuteOfkSign{11/15}  % permute_slots 150k seeds with natural > intervention
+
+% Table 5: endpoint sender-causal probe
+\def\TSCDeltaZeroFive{-0.0}  % sender-causal mean delta at f=0.5 (pp)
+\def\TSCAbsZeroFive{0.1}  % sender-causal mean abs delta at f=0.5 (pp)
+\def\TSCFlipZeroZeroFive{0.1}  % sender-causal flip0 at f=0.5 (%)
+\def\TSCFlipOneZeroFive{0.1}  % sender-causal flip1 at f=0.5 (%)
+\def\TSCDeltaOneFive{-0.0}  % sender-causal mean delta at f=1.5 (pp)
+\def\TSCAbsOneFive{0.9}  % sender-causal mean abs delta at f=1.5 (pp)
+\def\TSCFlipZeroOneFive{0.7}  % sender-causal flip0 at f=1.5 (%)
+\def\TSCFlipOneOneFive{0.6}  % sender-causal flip1 at f=1.5 (%)
+\def\TSCDeltaTwoFive{-0.7}  % sender-causal mean delta at f=2.5 (pp)
+\def\TSCAbsTwoFive{7.7}  % sender-causal mean abs delta at f=2.5 (pp)
+\def\TSCFlipZeroTwoFive{7.3}  % sender-causal flip0 at f=2.5 (%)
+\def\TSCFlipOneTwoFive{6.9}  % sender-causal flip1 at f=2.5 (%)
+\def\TSCDeltaThreeFive{+0.3}  % sender-causal mean delta at f=3.5 (pp)
+\def\TSCAbsThreeFive{5.0}  % sender-causal mean abs delta at f=3.5 (pp)
+\def\TSCFlipZeroThreeFive{12.2}  % sender-causal flip0 at f=3.5 (%)
+\def\TSCFlipOneThreeFive{12.9}  % sender-causal flip1 at f=3.5 (%)
+\def\TSCDeltaFiveZero{+0.4}  % sender-causal mean delta at f=5.0 (pp)
+\def\TSCAbsFiveZero{3.8}  % sender-causal mean abs delta at f=5.0 (pp)
+\def\TSCFlipZeroFiveZero{9.8}  % sender-causal flip0 at f=5.0 (%)
+\def\TSCFlipOneFiveZero{11.5}  % sender-causal flip1 at f=5.0 (%)
+
+% Table 6: mute experiment
+\def\TIVcommCoop{0.536}  % comm coop at 150k
+\def\TIVcommWelf{37.43}  % comm welfare
+\def\TIVncCoop{0.450}  % no-comm coop at 150k
+\def\TIVncWelf{34.01}  % no-comm welfare
 \def\TIVmuteCoop{0.367}  % mute coop at 150k
 \def\TIVmuteWelf{30.69}  % mute welfare
 \def\TIVmuteCoopPct{36.7}  % mute coop %
-\def\TIVncCoopPct{42.7}  % no-comm coop %
+\def\TIVncCoopPct{45.0}  % no-comm coop %
 
-% Table 5: aggregate vs per-sender token effects
-\def\TVaggFk{0.004}  % aggregate 50k
-\def\TVpsFk{0.214}  % per-sender 50k
+% Table 7: aggregate vs per-sender token effects
+\def\TVaggFk{-0.000}  % aggregate 50k
+\def\TVpsFk{0.218}  % per-sender 50k
 \def\TVratioFk{---}  % ratio 50k (agg~0)
-\def\TVaggHk{-0.011}  % aggregate 100k
-\def\TVpsHk{0.166}  % per-sender 100k
-\def\TVratioHk{15.2\times}  % ratio 100k
-\def\TVaggOfk{-0.018}  % aggregate 150k
-\def\TVpsOfk{0.184}  % per-sender 150k
-\def\TVratioOfk{10.5\times}  % ratio 150k
+\def\TVaggHk{-0.008}  % aggregate 100k
+\def\TVpsHk{0.178}  % per-sender 100k
+\def\TVratioHk{23.3\times}  % ratio 100k
+\def\TVaggOfk{0.003}  % aggregate 150k
+\def\TVpsOfk{0.186}  % per-sender 150k
+\def\TVratioOfk{---}  % ratio 150k (agg~0)
 
-% Table 6: polarity alignment
-\def\TVIpattFkA{3:1}  % seed 101 50k
-\def\TVIpattOfkA{1:3}  % seed 101 150k
-\def\TVItrajA{Polarity flipped}  % seed 101
-\def\TVIpattFkB{3:1}  % seed 202 50k
-\def\TVIpattOfkB{3:1}  % seed 202 150k
-\def\TVItrajB{Stable}  % seed 202
-\def\TVIpattFkC{2:2}  % seed 303 50k
-\def\TVIpattOfkC{0:4}  % seed 303 150k
-\def\TVItrajC{Achieved full alignment}  % seed 303
-\def\TVIpattFkD{2:2}  % seed 404 50k
-\def\TVIpattOfkD{3:1}  % seed 404 150k
-\def\TVItrajD{Improved}  % seed 404
-\def\TVIpattFkE{4:0}  % seed 505 50k
-\def\TVIpattOfkE{2:2}  % seed 505 150k
-\def\TVItrajE{Lost alignment}  % seed 505
+% Table 8: polarity alignment (summary over 15 seeds)
+\def\TVInSeeds{15}  % number of seeds in alignment table
+\def\TVItrajAchievedfull{2}  % n seeds with trajectory 'Achieved full alignment'
+\def\TVItrajImproved{3}  % n seeds with trajectory 'Improved'
+\def\TVItrajLostalignmen{5}  % n seeds with trajectory 'Lost alignment'
+\def\TVItrajPolarityflip{2}  % n seeds with trajectory 'Polarity flipped'
+\def\TVItrajStable{3}  % n seeds with trajectory 'Stable'
 
 % Prose claims
-\def\pvGapTFFkPP{30.4}  % comm gap f=3.5 50k (pp)
-\def\pvGapTFOfkPP{19.2}  % comm gap f=3.5 150k (pp)
-\def\pvGapTFFkPval{<0.001}  % p-value for gap at f=3.5 50k
-\def\pvGapDeclinePct{37}  % gap decline %
-\def\pvGapRangeLo{25.1}  % per-seed gap min at 50k (pp)
-\def\pvGapRangeHi{36.6}  % per-seed gap max at 50k (pp)
-\def\pvNposOfk{4}  % n seeds with positive gap at 150k
-\def\pvGapFVFkPP{7.9}  % comm gap f=5.0 50k (pp)
-\def\pvGapFVOfkPP{-7.2}  % comm gap f=5.0 150k (pp)
+\def\pvGapTFFkPP{30.3}  % comm gap f=3.5 50k (pp)
+\def\pvGapTFOfkPP{8.6}  % comm gap f=3.5 150k (pp)
+\def\pvGapTFFkPval{=0.0001}  % p-value for gap at f=3.5 50k
+\def\pvGapDeclinePct{72}  % gap decline %
+\def\pvGapRangeLo{10.5}  % per-seed gap min at 50k (pp)
+\def\pvGapRangeHi{49.4}  % per-seed gap max at 50k (pp)
+\def\pvNposOfk{10}  % n seeds with positive gap at 150k
+\def\pvGapFVFkPP{2.9}  % comm gap f=5.0 50k (pp)
+\def\pvGapFVOfkPP{-24.0}  % comm gap f=5.0 150k (pp)
 \def\pvCtrlAdvLo{14}  % control advantage low (pp)
 \def\pvCtrlAdvHi{19}  % control advantage high (pp)
-\def\pvMuteBelowPP{6}  % mute below no-comm (pp)
-\def\pvRatioFk{>43}  % per-sender/agg ratio 50k
-\def\pvRatioOfk{10}  % per-sender/agg ratio 150k
-\def\pvAggFkPP{0.4}  % aggregate token effect 50k (pp)
-\def\pvPsFkPP{21.4}  % per-sender effect 50k (pp)
-\def\pvAggOfkPP{1.8}  % aggregate effect 150k (pp)
-\def\pvPsOfkPP{18.4}  % per-sender effect 150k (pp)
-\def\pvCommCoopTFFkPct{80.9}  % comm coop % at f=3.5 50k
-\def\pvNcCoopTFFkPct{51}  % no-comm coop % at f=3.5 50k
+\def\pvMuteBelowPP{8}  % mute below no-comm (pp)
+\def\pvRatioFk{>44}  % per-sender/agg ratio 50k
+\def\pvRatioOfk{---}  % per-sender/agg ratio 150k
+\def\pvAggFkPP{-0.0}  % aggregate token effect 50k (pp)
+\def\pvPsFkPP{21.8}  % per-sender effect 50k (pp)
+\def\pvAggOfkPP{0.3}  % aggregate effect 150k (pp)
+\def\pvPsOfkPP{18.6}  % per-sender effect 150k (pp)
+\def\pvCommCoopTFFkPct{77.5}  % comm coop % at f=3.5 50k
+\def\pvNcCoopTFFkPct{47}  % no-comm coop % at f=3.5 50k
+\def\pvNSeeds{15}  % total number of seeds
 
-% Appendix: per-seed cooperation and gaps at f=3.5
-\def\pvPScommSaFk{0.785}  % seed 101 comm 3.5 50k
-\def\pvPSgapSaFk{+0.294}  % seed 101 gap 3.5 50k
-\def\pvPScommSaHk{0.312}  % seed 101 comm 3.5 100k
-\def\pvPSgapSaHk{-0.047}  % seed 101 gap 3.5 100k
-\def\pvPScommSaOfk{0.325}  % seed 101 comm 3.5 150k
-\def\pvPSgapSaOfk{-0.029}  % seed 101 gap 3.5 150k
-\def\pvPScommSbFk{0.834}  % seed 202 comm 3.5 50k
-\def\pvPSgapSbFk{+0.366}  % seed 202 gap 3.5 50k
-\def\pvPScommSbHk{0.762}  % seed 202 comm 3.5 100k
-\def\pvPSgapSbHk{+0.370}  % seed 202 gap 3.5 100k
-\def\pvPScommSbOfk{0.609}  % seed 202 comm 3.5 150k
-\def\pvPSgapSbOfk{+0.181}  % seed 202 gap 3.5 150k
-\def\pvPScommScFk{0.808}  % seed 303 comm 3.5 50k
-\def\pvPSgapScFk{+0.272}  % seed 303 gap 3.5 50k
-\def\pvPScommScHk{0.461}  % seed 303 comm 3.5 100k
-\def\pvPSgapScHk{+0.002}  % seed 303 gap 3.5 100k
-\def\pvPScommScOfk{0.709}  % seed 303 comm 3.5 150k
-\def\pvPSgapScOfk{+0.280}  % seed 303 gap 3.5 150k
-\def\pvPScommSdFk{0.901}  % seed 404 comm 3.5 50k
-\def\pvPSgapSdFk{+0.338}  % seed 404 gap 3.5 50k
-\def\pvPScommSdHk{0.804}  % seed 404 comm 3.5 100k
-\def\pvPSgapSdHk{+0.314}  % seed 404 gap 3.5 100k
-\def\pvPScommSdOfk{0.890}  % seed 404 comm 3.5 150k
-\def\pvPSgapSdOfk{+0.363}  % seed 404 gap 3.5 150k
-\def\pvPScommSeFk{0.720}  % seed 505 comm 3.5 50k
-\def\pvPSgapSeFk{+0.251}  % seed 505 gap 3.5 50k
-\def\pvPScommSeHk{0.599}  % seed 505 comm 3.5 100k
-\def\pvPSgapSeHk{+0.143}  % seed 505 gap 3.5 100k
-\def\pvPScommSeOfk{0.562}  % seed 505 comm 3.5 150k
-\def\pvPSgapSeOfk{+0.166}  % seed 505 gap 3.5 150k
-\def\pvPScommMeanFk{0.809}  % mean comm 3.5 50k
-\def\pvPSgapMeanFk{+0.304}  % mean gap 3.5 50k
-\def\pvPScommMeanHk{0.588}  % mean comm 3.5 100k
-\def\pvPSgapMeanHk{+0.156}  % mean gap 3.5 100k
-\def\pvPScommMeanOfk{0.619}  % mean comm 3.5 150k
-\def\pvPSgapMeanOfk{+0.192}  % mean gap 3.5 150k
+% Appendix: summary stats for cooperation and gaps at f=3.5
+\def\pvPSnSeedsFk{15}  % n seeds at 50k
+\def\pvPScommMeanFk{0.775}  % mean comm 3.5 50k
+\def\pvPScommSDFk{0.108}  % SD comm 3.5 50k
+\def\pvPScommMinFk{0.544}  % min comm 3.5 50k
+\def\pvPScommMaxFk{0.904}  % max comm 3.5 50k
+\def\pvPSgapMeanFk{+0.303}  % mean gap 3.5 50k
+\def\pvPSgapSDFk{0.094}  % SD gap 3.5 50k
+\def\pvPSgapMinFk{+0.105}  % min gap 3.5 50k
+\def\pvPSgapMaxFk{+0.494}  % max gap 3.5 50k
+\def\pvPSnSeedsHk{15}  % n seeds at 100k
+\def\pvPScommMeanHk{0.559}  % mean comm 3.5 100k
+\def\pvPScommSDHk{0.211}  % SD comm 3.5 100k
+\def\pvPScommMinHk{0.219}  % min comm 3.5 100k
+\def\pvPScommMaxHk{0.919}  % max comm 3.5 100k
+\def\pvPSgapMeanHk{+0.137}  % mean gap 3.5 100k
+\def\pvPSgapSDHk{0.218}  % SD gap 3.5 100k
+\def\pvPSgapMinHk{-0.233}  % min gap 3.5 100k
+\def\pvPSgapMaxHk{+0.544}  % max gap 3.5 100k
+\def\pvPSnSeedsOfk{15}  % n seeds at 150k
+\def\pvPScommMeanOfk{0.536}  % mean comm 3.5 150k
+\def\pvPScommSDOfk{0.146}  % SD comm 3.5 150k
+\def\pvPScommMinOfk{0.325}  % min comm 3.5 150k
+\def\pvPScommMaxOfk{0.890}  % max comm 3.5 150k
+\def\pvPSgapMeanOfk{+0.086}  % mean gap 3.5 150k
+\def\pvPSgapSDOfk{0.162}  % SD gap 3.5 150k
+\def\pvPSgapMinOfk{-0.167}  % min gap 3.5 150k
+\def\pvPSgapMaxOfk{+0.363}  % max gap 3.5 150k
 

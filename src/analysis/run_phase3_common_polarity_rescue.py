@@ -9,6 +9,12 @@ import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Tuple
 
+from src.analysis.checkpoint_artifacts import (
+    atomic_write_json,
+    atomic_write_rows,
+    csv_has_data_rows,
+    resolve_checkpoint_path,
+)
 
 _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -23,7 +29,6 @@ def _read_csv_rows(path: str) -> List[Dict]:
 def _write_rows(path: str, rows: List[Dict]):
     if len(rows) == 0:
         return
-    os.makedirs(os.path.dirname(path), exist_ok=True)
     fieldnames = []
     seen = set()
     for row in rows:
@@ -32,11 +37,7 @@ def _write_rows(path: str, rows: List[Dict]):
                 continue
             seen.add(key)
             fieldnames.append(key)
-    with open(path, "w", newline="", encoding="utf-8") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row)
+    atomic_write_rows(path, rows, fieldnames)
 
 
 def _as_int(row: Dict, key: str, default: int = 0) -> int:
@@ -54,15 +55,7 @@ def _as_float(row: Dict, key: str, default: float = 0.0) -> float:
 
 
 def _checkpoint_path(checkpoint_dir: str, condition: str, seed: int, episode: int) -> str:
-    base = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}.pt")
-    if int(episode) == 200000 and os.path.exists(base):
-        return base
-    ep_path = os.path.join(checkpoint_dir, f"{condition}_seed{int(seed)}_ep{int(episode)}.pt")
-    if os.path.exists(ep_path):
-        return ep_path
-    if os.path.exists(base):
-        return base
-    raise FileNotFoundError(f"checkpoint missing for {condition} seed={seed} episode={episode}")
+    return resolve_checkpoint_path(checkpoint_dir, condition, seed, episode)
 
 
 def _build_flip_maps(rows: List[Dict], basis: str) -> Dict[Tuple[str, int, int], Dict[str, int]]:
@@ -100,7 +93,7 @@ def _run_task(task: Dict, raw_dir: str, log_dir: str, skip_existing: bool) -> Di
     out_comm_csv = os.path.join(raw_dir, f"{task['name']}_comm.csv")
     log_path = os.path.join(log_dir, f"{task['name']}.log")
     expected = [out_csv, out_condition_csv, out_comm_csv]
-    if skip_existing and all(os.path.exists(path) for path in expected):
+    if skip_existing and all(csv_has_data_rows(path) for path in expected):
         return {
             **task,
             "out_csv": out_csv,
@@ -240,8 +233,7 @@ def main():
 
     results = sorted(results, key=lambda item: item["name"])
     _aggregate_results(results, out_dir)
-    with open(os.path.join(out_dir, "common_polarity_rescue_manifest.json"), "w", encoding="utf-8") as f:
-        json.dump(results, f, indent=2)
+    atomic_write_json(os.path.join(out_dir, "common_polarity_rescue_manifest.json"), results)
     print(f"[common-polarity-rescue] tasks={len(results)} out_dir={out_dir}")
 
 
