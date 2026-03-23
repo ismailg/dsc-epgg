@@ -25,12 +25,29 @@ def parse_args():
     p.add_argument("--baseline_condition", type=str, default="cond2")
     p.add_argument("--seeds", nargs="*", type=int, default=[101, 202, 303, 404, 505])
     p.add_argument("--milestones", nargs="*", type=int, default=[50000, 150000, 200000])
-    p.add_argument("--interventions", nargs="*", type=str, default=["none", "zeros", "fixed0", "fixed1"])
+    p.add_argument(
+        "--interventions",
+        nargs="*",
+        type=str,
+        default=[
+            "none",
+            "zeros",
+            "marginal",
+            "fixed0",
+            "fixed1",
+            "indep_random",
+            "public_random",
+            "sender_shuffle",
+            "permute_slots",
+        ],
+    )
+    p.add_argument("--history_intervention", type=str, default="none")
     p.add_argument("--crossplay_sender_milestones", nargs="*", type=int, default=[50000, 150000, 200000])
     p.add_argument("--crossplay_receiver_milestones", nargs="*", type=int, default=[200000])
     p.add_argument("--n_eval_episodes", type=int, default=300)
     p.add_argument("--eval_seed", type=int, default=9001)
     p.add_argument("--max_workers", type=int, default=4)
+    p.add_argument("--eval_sigmas", nargs="*", type=float, default=None)
     p.add_argument("--skip_existing", action="store_true")
     return p.parse_args()
 
@@ -58,6 +75,8 @@ def main():
         *[str(int(v)) for v in args.milestones],
         "--interventions",
         *[str(v) for v in args.interventions],
+        "--history_intervention",
+        str(args.history_intervention),
         "--n_eval_episodes",
         str(int(args.n_eval_episodes)),
         "--eval_seed",
@@ -65,6 +84,8 @@ def main():
         "--max_workers",
         str(int(args.max_workers)),
     ]
+    if args.eval_sigmas is not None and len(args.eval_sigmas) > 0:
+        suite_cmd.extend(["--eval_sigmas", *[str(float(v)) for v in args.eval_sigmas]])
     if bool(args.skip_existing):
         suite_cmd.append("--skip_existing")
     _run(suite_cmd)
@@ -92,6 +113,8 @@ def main():
         "--max_workers",
         str(int(args.max_workers)),
     ]
+    if args.eval_sigmas is not None and len(args.eval_sigmas) > 0:
+        crossplay_cmd.extend(["--eval_sigmas", *[str(float(v)) for v in args.eval_sigmas]])
     if bool(args.skip_existing):
         crossplay_cmd.append("--skip_existing")
     _run(crossplay_cmd)
@@ -105,8 +128,10 @@ def main():
         "seeds": [int(v) for v in args.seeds],
         "milestones": [int(v) for v in args.milestones],
         "interventions": [str(v) for v in args.interventions],
+        "history_intervention": str(args.history_intervention),
         "crossplay_sender_milestones": [int(v) for v in args.crossplay_sender_milestones],
         "crossplay_receiver_milestones": [int(v) for v in args.crossplay_receiver_milestones],
+        "eval_sigmas": [float(v) for v in args.eval_sigmas] if args.eval_sigmas is not None else None,
     }
     manifest_path = os.path.join(os.path.abspath(os.path.dirname(args.suite_out_dir)), "phase3_trimmed_eval_manifest.json")
     with open(manifest_path, "w", encoding="utf-8") as f:

@@ -1,3 +1,13 @@
 __pycache__/
+.pytest_cache/
+.DS_Store
+.Rhistory
+.codex-iwrignore
 DIDACTIC_OVERVIEW.md
+DIDACTIC_OVERVIEW.html
 RESEARCH_LOG.md
+iwr-results/
+paper/Styles/
+paper/Styles.zip
+paper/neurips2026_comm/main.pdf
+paper/neurips2026_comm/.Rhistory

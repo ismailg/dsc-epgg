@@ -12,6 +12,20 @@ These notes are additive to the parent [AGENTS.md](/Users/mbp17/POSTDOC/NPS26/AG
 - If the laptop may sleep, run the PTY command under `caffeinate`, for example:
   - `caffeinate -dimsu /bin/zsh scripts/run_phase3_annealed_pipeline.sh`
 
+## Torch / pytest execution in Codex
+
+- Standard local command for Torch-backed tests and eval scripts:
+  - `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES python3 -m pytest ...`
+- In the Codex sandbox, PyTorch can abort during import with:
+  - `OMP: Error #179: Can't open SHM2 failed`
+- Treat that as a sandbox/runtime issue, not a repo regression:
+  - rerun the same Torch/pytest command with escalated host execution
+  - do not burn cycles trying additional OpenMP env-var combinations first
+- This applies to:
+  - `pytest` on files importing `torch`
+  - evaluation scripts such as [evaluate_regime_conditional.py](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/src/analysis/evaluate_regime_conditional.py)
+  - training/eval runners that spawn Torch subprocesses
+
 ## CPU / BLAS thread caps
 
 - Cap BLAS/OpenMP threads to `1` for each training worker, otherwise a small number of PPO processes can oversubscribe all cores:

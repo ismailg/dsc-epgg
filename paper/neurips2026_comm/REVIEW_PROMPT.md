@@ -129,7 +129,7 @@ Score 1-10 and accept/weak accept/borderline/weak reject/reject, with 2-sentence
 
 - Read the full `DIDACTIC_OVERVIEW.md` for context on the experimental history and what each experiment means.
 - Read the full `RESEARCH_LOG.md` for the chronological record of results and supervisor feedback.
-- Read `NEXT_STEPS_IMPLEMENTATION_PROMPT.md` for what experiments are still pending.
+- Read `docs/notes/NEXT_STEPS_IMPLEMENTATION_PROMPT.md` for what experiments are still pending.
 - The paper is a FIRST DRAFT. Be constructive. Distinguish between "this is wrong" and "this needs work."
 - Pay special attention to whether the paper correctly distinguishes between the two different channel control experiments:
   - **Separate-training controls** (each mode trained from scratch, 3 seeds)

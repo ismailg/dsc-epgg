@@ -152,3 +152,19 @@ class ObservationWrapper:
     def message_start_idx(self) -> int:
         # Base Set-A fields before message one-hot blocks.
         return 5
+
+    @property
+    def last_coop_idx(self) -> int:
+        return 2
+
+    @property
+    def own_last_action_idx(self) -> int:
+        return 3
+
+    @property
+    def ewma_coop_idx(self) -> int:
+        return 4
+
+    @property
+    def temporal_feature_slice(self) -> slice:
+        return slice(self.last_coop_idx, self.ewma_coop_idx + 1)
