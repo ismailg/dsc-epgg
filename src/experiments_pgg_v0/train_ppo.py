@@ -24,6 +24,7 @@ from src.algos.PPO import PPOAgentV2, PPOTrainer
 from src.algos.trajectory_buffer import TrajectoryBuffer, VectorizedTrajectoryBuffer
 from src.analysis.regime_audit import regime_audit
 from src.environments import pgg_parallel_v0
+from src.experiments_pgg_v0.env_pool import SerialParallelEnvPool, SubprocParallelEnvPool
 from src.logging import SessionLogger
 from src.wrappers import ObservationWrapper
 
@@ -44,6 +45,9 @@ class TrainConfig:
     T: int = 100
     n_episodes: int = 100
     num_envs: int = 1
+    count_env_episodes: bool = False
+    env_backend: str = "serial"
+    env_start_method: str = "spawn"
     endowment: float = 4.0
 
     F: tuple = (0.5, 1.5, 2.5, 3.5, 5.0)
@@ -81,6 +85,7 @@ class TrainConfig:
     log_interval: int = 10
     save_path: str = "outputs/ppo_agents.pt"
     init_ckpt: str = ""
+    resume_ckpt: str = ""
     reward_scale: float = 20.0
     lr_schedule: str = "none"  # one of: none, linear, cosine
     min_lr: float = 1e-5
@@ -321,6 +326,10 @@ def _scheduled_value(
 
 
 def _build_env(cfg: TrainConfig):
+    return pgg_parallel_v0.parallel_env(_make_env_cfg(cfg))
+
+
+def _make_env_cfg(cfg: TrainConfig) -> Dict:
     env_cfg = dict(
         n_agents=cfg.n_agents,
         num_game_iterations=cfg.T,
@@ -332,11 +341,40 @@ def _build_env(cfg: TrainConfig):
         epsilon_tremble=cfg.epsilon_tremble,
         endowment=cfg.endowment,
     )
-    return pgg_parallel_v0.parallel_env(env_cfg)
+    return env_cfg
 
 
 def _build_envs(cfg: TrainConfig):
     return [_build_env(cfg) for _ in range(int(cfg.num_envs))]
+
+
+def _build_vector_env_backend(cfg: TrainConfig):
+    env_cfg = _make_env_cfg(cfg)
+    if str(cfg.env_backend) == "serial":
+        return SerialParallelEnvPool(
+            env_cfg=env_cfg,
+            n_envs=int(cfg.num_envs),
+            base_seed=int(cfg.seed),
+        )
+    if str(cfg.env_backend) == "subproc":
+        return SubprocParallelEnvPool(
+            env_cfg=env_cfg,
+            n_envs=int(cfg.num_envs),
+            base_seed=int(cfg.seed),
+            start_method=str(cfg.env_start_method),
+        )
+    raise ValueError(f"unknown env_backend: {cfg.env_backend}")
+
+
+def _episode_stride(cfg: TrainConfig) -> int:
+    if bool(cfg.count_env_episodes) and int(cfg.num_envs) > 1:
+        return int(cfg.num_envs)
+    return 1
+
+
+def _total_updates(cfg: TrainConfig) -> int:
+    stride = _episode_stride(cfg)
+    return int(math.ceil(float(cfg.n_episodes) / float(max(1, stride))))
 
 
 def _build_wrapper(cfg: TrainConfig, sender_ids: List[str]):
@@ -393,6 +431,35 @@ def _safe_load_state_dict(module: torch.nn.Module, loaded: Dict):
     module.load_state_dict(compatible, strict=False)
 
 
+def _module_device(module: torch.nn.Module) -> torch.device:
+    try:
+        return next(module.parameters()).device
+    except StopIteration:
+        return device
+
+
+def _optimizer_to_device(optimizer: torch.optim.Optimizer, target_device: torch.device):
+    for state in optimizer.state.values():
+        for key, value in state.items():
+            if torch.is_tensor(value):
+                state[key] = value.to(target_device)
+
+
+def _safe_load_optimizer_state_dict(
+    optimizer: torch.optim.Optimizer,
+    loaded: Optional[Dict],
+    target_device: torch.device,
+) -> bool:
+    if loaded is None:
+        return False
+    try:
+        optimizer.load_state_dict(loaded)
+        _optimizer_to_device(optimizer, target_device)
+        return True
+    except (ValueError, RuntimeError):
+        return False
+
+
 def _maybe_load_agents(agents: Dict[str, PPOAgentV2], init_ckpt: str):
     ckpt = str(init_ckpt or "").strip()
     if ckpt == "":
@@ -411,13 +478,73 @@ def _maybe_load_agents(agents: Dict[str, PPOAgentV2], init_ckpt: str):
             _safe_load_state_dict(agent.message_actor, saved["message_actor"])
 
 
-def _save_agents(path: str, agents: Dict[str, PPOAgentV2], cfg: TrainConfig):
+def _maybe_resume_agents(agents: Dict[str, PPOAgentV2], resume_ckpt: str) -> Dict:
+    ckpt = str(resume_ckpt or "").strip()
+    if ckpt == "":
+        return {}
+    if not os.path.exists(ckpt):
+        raise FileNotFoundError(f"resume_ckpt not found: {ckpt}")
+    payload = torch.load(ckpt, map_location="cpu")
+    saved_agents = payload.get("agents", {})
+    for agent_id, agent in agents.items():
+        if agent_id not in saved_agents:
+            continue
+        saved = saved_agents[agent_id]
+        _safe_load_state_dict(agent.action_actor, saved["action_actor"])
+        _safe_load_state_dict(agent.value_net, saved["value_net"])
+        if agent.message_actor is not None and saved.get("message_actor") is not None:
+            _safe_load_state_dict(agent.message_actor, saved["message_actor"])
+        _safe_load_optimizer_state_dict(
+            agent.optimizer,
+            saved.get("optimizer"),
+            target_device=_module_device(agent.action_actor),
+        )
+    return payload
+
+
+def _resolve_resume_config(cfg: TrainConfig, payload: Dict) -> int:
+    training_state = payload.get("training_state", {}) if isinstance(payload, dict) else {}
+    saved_cfg = payload.get("config", {}) if isinstance(payload, dict) else {}
+    abs_episode = int(training_state.get("abs_episode", 0) or 0)
+    if abs_episode <= 0:
+        saved_n_episodes = int(saved_cfg.get("n_episodes", 0) or 0)
+        saved_offset = int(saved_cfg.get("episode_offset", 0) or 0)
+        abs_episode = int(saved_offset + saved_n_episodes)
+
+    if int(cfg.episode_offset) == 0:
+        cfg.episode_offset = int(abs_episode)
+    elif int(cfg.episode_offset) != int(abs_episode):
+        raise ValueError(
+            "resume_ckpt episode mismatch: "
+            f"cfg.episode_offset={cfg.episode_offset} saved_abs_episode={abs_episode}"
+        )
+
+    if int(cfg.schedule_total_episodes) <= 0:
+        saved_total = int(saved_cfg.get("schedule_total_episodes", 0) or 0)
+        if saved_total > 0:
+            cfg.schedule_total_episodes = int(saved_total)
+
+    return int(abs_episode)
+
+
+def _save_agents(
+    path: str,
+    agents: Dict[str, PPOAgentV2],
+    cfg: TrainConfig,
+    abs_episode: int = 0,
+    local_episode: int = 0,
+):
     save_dir = os.path.dirname(path)
     if save_dir:
         os.makedirs(save_dir, exist_ok=True)
     payload = {
+        "checkpoint_state_version": 2,
         "config": cfg.__dict__,
         "agents": {},
+        "training_state": {
+            "abs_episode": int(abs_episode),
+            "local_episode": int(local_episode),
+        },
     }
     for agent_id, agent in agents.items():
         payload["agents"][agent_id] = {
@@ -426,6 +553,7 @@ def _save_agents(path: str, agents: Dict[str, PPOAgentV2], cfg: TrainConfig):
             "message_actor": (
                 agent.message_actor.state_dict() if agent.message_actor is not None else None
             ),
+            "optimizer": agent.optimizer.state_dict(),
         }
     torch.save(payload, path)
     _write_run_manifest(path=path, cfg=cfg)
@@ -456,13 +584,13 @@ def _write_run_manifest(path: str, cfg: TrainConfig):
 
 def _collect_vectorized_rollout(
     cfg: TrainConfig,
-    envs,
+    env_backend,
     wrappers,
     agents: Dict[str, PPOAgentV2],
     agent_ids: List[str],
     sender_ids: List[str],
 ):
-    n_envs = len(envs)
+    n_envs = len(wrappers)
     value_obs_dim = (5 + len(sender_ids) * cfg.vocab_size if cfg.comm_enabled else 5) + (
         1 if cfg.value_time_feature else 0
     )
@@ -479,7 +607,7 @@ def _collect_vectorized_rollout(
 
     for wrapper in wrappers:
         wrapper.reset(agent_ids)
-    raw_obs_batch = [env.reset() for env in envs]
+    raw_obs_batch = env_backend.reset_all()
     current_messages_batch = [None for _ in range(n_envs)]
     done_batch = [False for _ in range(n_envs)]
     steps = 0
@@ -624,16 +752,21 @@ def _collect_vectorized_rollout(
         true_f_batch = []
         done_out_batch = []
 
-        for env_idx, env in enumerate(envs):
-            raw_obs_next, rewards, done, infos = env.step(intended_actions_batch[env_idx])
-            rewards_raw = _to_float_rewards(rewards)
+        next_obs_batch, rewards_batch, done_result_batch, infos_batch = env_backend.step_batch(
+            intended_actions_batch
+        )
+        for env_idx in range(n_envs):
+            raw_obs_next = next_obs_batch[env_idx]
+            rewards_raw = _to_float_rewards(rewards_batch[env_idx])
+            done = done_result_batch[env_idx]
+            infos = infos_batch[env_idx]
             rewards_train = {
                 agent_id: (rewards_raw[agent_id] / float(cfg.reward_scale))
                 for agent_id in agent_ids
             }
             executed_actions = infos.get("executed_actions", intended_actions_batch[env_idx])
             flips = infos.get("flips", {agent_id: False for agent_id in agent_ids})
-            true_f = float(infos.get("true_f", env.current_multiplier.item()))
+            true_f = float(infos.get("true_f", 0.0))
 
             wrappers[env_idx].update(executed_actions)
 
@@ -717,693 +850,730 @@ def _single_run(cfg: TrainConfig):
         )
 
     env = _build_env(cfg) if int(cfg.num_envs) == 1 else None
-    envs = _build_envs(cfg) if int(cfg.num_envs) > 1 else None
+    vector_env_backend = _build_vector_env_backend(cfg) if int(cfg.num_envs) > 1 else None
     wrapper = _build_wrapper(cfg, sender_ids) if int(cfg.num_envs) == 1 else None
     wrappers = (
         [_build_wrapper(cfg, sender_ids) for _ in range(int(cfg.num_envs))]
         if int(cfg.num_envs) > 1
         else None
     )
-    obs_wrapper = wrapper if wrapper is not None else wrappers[0]
-    agents = _build_agents(cfg, obs_dim=obs_wrapper.obs_dim, sender_ids=sender_ids)
-    _maybe_load_agents(agents=agents, init_ckpt=cfg.init_ckpt)
-    if cfg.lr_schedule == "linear":
-        _set_agents_lr(agents, cfg.lr)
-    ppo = PPOTrainer(
-        agents=agents,
-        clip_ratio=cfg.clip_ratio,
-        value_coeff=cfg.value_coeff,
-        entropy_coeff=cfg.entropy_coeff,
-        msg_entropy_coeff=cfg.msg_entropy_coeff,
-        max_grad_norm=cfg.max_grad_norm,
-        ppo_epochs=cfg.ppo_epochs,
-        mini_batch_size=cfg.mini_batch_size,
-        sign_lambda=cfg.sign_lambda,
-        list_lambda=cfg.list_lambda,
-    )
-    session_logger = (
-        SessionLogger(
-            save_dir=cfg.session_log_dir,
-            condition_name=cfg.condition_name,
-            seed=cfg.seed,
+    try:
+        obs_wrapper = wrapper if wrapper is not None else wrappers[0]
+        agents = _build_agents(cfg, obs_dim=obs_wrapper.obs_dim, sender_ids=sender_ids)
+        resume_payload = {}
+        if str(cfg.resume_ckpt or "").strip():
+            resume_payload = _maybe_resume_agents(agents=agents, resume_ckpt=cfg.resume_ckpt)
+            _resolve_resume_config(cfg, resume_payload)
+        elif str(cfg.init_ckpt or "").strip():
+            _maybe_load_agents(agents=agents, init_ckpt=cfg.init_ckpt)
+        if cfg.lr_schedule == "linear":
+            _set_agents_lr(agents, cfg.lr)
+        ppo = PPOTrainer(
+            agents=agents,
+            clip_ratio=cfg.clip_ratio,
+            value_coeff=cfg.value_coeff,
+            entropy_coeff=cfg.entropy_coeff,
+            msg_entropy_coeff=cfg.msg_entropy_coeff,
+            max_grad_norm=cfg.max_grad_norm,
+            ppo_epochs=cfg.ppo_epochs,
+            mini_batch_size=cfg.mini_batch_size,
+            sign_lambda=cfg.sign_lambda,
+            list_lambda=cfg.list_lambda,
         )
-        if cfg.log_sessions
-        else None
-    )
-    wandb_run = None
-    if cfg.use_wandb:
-        try:
-            import wandb  # local import to keep dependency optional at runtime
-
-            wandb_run = wandb.init(
-                project=cfg.wandb_project,
-                mode=cfg.wandb_mode,
-                config=cfg.__dict__,
+        session_logger = (
+            SessionLogger(
+                save_dir=cfg.session_log_dir,
+                condition_name=cfg.condition_name,
+                seed=cfg.seed,
             )
-        except Exception as exc:
-            print(f"[wandb] disabled due to init error: {exc}")
-            wandb_run = None
+            if cfg.log_sessions
+            else None
+        )
+        wandb_run = None
+        if cfg.use_wandb:
+            try:
+                import wandb  # local import to keep dependency optional at runtime
 
-    metrics_over_time = []
-    cumulative_regime_acc = {label: _bucket() for label in ("competitive", "mixed", "cooperative")}
-    window_regime_acc = {label: _bucket() for label in ("competitive", "mixed", "cooperative")}
-    cumulative_f_acc: Dict[str, Dict[str, float]] = {}
-    window_f_acc: Dict[str, Dict[str, float]] = {}
-    sender_agent_idx = {sender_id: agent_ids.index(sender_id) for sender_id in sender_ids}
-    f_keys_sorted = sorted({f"{float(v):.3f}" for v in cfg.F}, key=float)
-    f_key_to_idx = {key: idx for idx, key in enumerate(f_keys_sorted)}
+                wandb_run = wandb.init(
+                    project=cfg.wandb_project,
+                    mode=cfg.wandb_mode,
+                    config=cfg.__dict__,
+                )
+            except Exception as exc:
+                print(f"[wandb] disabled due to init error: {exc}")
+                wandb_run = None
 
-    def _new_comm_window_counts():
-        return {
-            sender_id: {
-                "msg_f": np.zeros((cfg.vocab_size, len(f_keys_sorted)), dtype=np.float64),
-                "msg_action": np.zeros((cfg.vocab_size, 2), dtype=np.float64),
-            }
-            for sender_id in sender_ids
+        metrics_over_time = []
+        cumulative_regime_acc = {
+            label: _bucket() for label in ("competitive", "mixed", "cooperative")
         }
+        window_regime_acc = {label: _bucket() for label in ("competitive", "mixed", "cooperative")}
+        cumulative_f_acc: Dict[str, Dict[str, float]] = {}
+        window_f_acc: Dict[str, Dict[str, float]] = {}
+        sender_agent_idx = {sender_id: agent_ids.index(sender_id) for sender_id in sender_ids}
+        f_keys_sorted = sorted({f"{float(v):.3f}" for v in cfg.F}, key=float)
+        f_key_to_idx = {key: idx for idx, key in enumerate(f_keys_sorted)}
+        def _new_comm_window_counts():
+            return {
+                sender_id: {
+                    "msg_f": np.zeros((cfg.vocab_size, len(f_keys_sorted)), dtype=np.float64),
+                    "msg_action": np.zeros((cfg.vocab_size, 2), dtype=np.float64),
+                }
+                for sender_id in sender_ids
+            }
 
-    window_comm_counts = _new_comm_window_counts() if (cfg.comm_enabled and len(sender_ids) > 0) else {}
-    window_responsiveness = (
-        {agent_id: [] for agent_id in agent_ids}
-        if (cfg.comm_enabled and len(sender_ids) > 0 and cfg.log_trainer_responsiveness)
-        else {}
-    )
-    mi_rng = np.random.default_rng(int(cfg.seed) + 1729)
-    best_metric = -float("inf")
-    stale_epochs = 0
-    for episode in range(cfg.n_episodes):
-        abs_episode0 = int(cfg.episode_offset) + int(episode)
-        abs_episode1 = int(abs_episode0) + 1
-        total_schedule_episodes = int(cfg.schedule_total_episodes)
-        if total_schedule_episodes <= 0:
-            total_schedule_episodes = int(cfg.episode_offset) + int(cfg.n_episodes)
-        progress = float(abs_episode0) / float(max(1, total_schedule_episodes - 1))
-        if cfg.lr_schedule != "none":
-            episode_lr = _scheduled_value(
-                initial=float(cfg.lr),
-                final=float(cfg.min_lr),
-                schedule=str(cfg.lr_schedule),
+        window_comm_counts = (
+            _new_comm_window_counts() if (cfg.comm_enabled and len(sender_ids) > 0) else {}
+        )
+        window_responsiveness = (
+            {agent_id: [] for agent_id in agent_ids}
+            if (cfg.comm_enabled and len(sender_ids) > 0 and cfg.log_trainer_responsiveness)
+            else {}
+        )
+        mi_rng = np.random.default_rng(int(cfg.seed) + 1729)
+        best_metric = -float("inf")
+        stale_epochs = 0
+        episode_stride = _episode_stride(cfg)
+        total_updates = _total_updates(cfg)
+        last_abs_episode = int(cfg.episode_offset)
+        last_local_episode = 0
+
+        for episode in range(total_updates):
+            local_episode0 = int(episode) * int(episode_stride)
+            local_episode1 = min(int(cfg.n_episodes), local_episode0 + int(episode_stride))
+            abs_episode0 = int(cfg.episode_offset) + int(local_episode0)
+            abs_episode1 = int(cfg.episode_offset) + int(local_episode1)
+            last_abs_episode = int(abs_episode1)
+            last_local_episode = int(local_episode1)
+            total_schedule_episodes = int(cfg.schedule_total_episodes)
+            if total_schedule_episodes <= 0:
+                total_schedule_episodes = int(cfg.episode_offset) + int(cfg.n_episodes)
+            progress = float(abs_episode0) / float(max(1, total_schedule_episodes - 1))
+            if cfg.lr_schedule != "none":
+                episode_lr = _scheduled_value(
+                    initial=float(cfg.lr),
+                    final=float(cfg.min_lr),
+                    schedule=str(cfg.lr_schedule),
+                    progress=progress,
+                )
+                _set_agents_lr(agents, episode_lr)
+            else:
+                episode_lr = float(cfg.lr)
+
+            ppo.entropy_coeff = _scheduled_value(
+                initial=float(cfg.entropy_coeff),
+                final=float(cfg.entropy_coeff_final),
+                schedule=str(cfg.entropy_schedule),
                 progress=progress,
             )
-            _set_agents_lr(agents, episode_lr)
-        else:
-            episode_lr = float(cfg.lr)
-
-        ppo.entropy_coeff = _scheduled_value(
-            initial=float(cfg.entropy_coeff),
-            final=float(cfg.entropy_coeff_final),
-            schedule=str(cfg.entropy_schedule),
-            progress=progress,
-        )
-        msg_entropy_initial = (
-            float(cfg.msg_entropy_coeff)
-            if cfg.msg_entropy_coeff is not None
-            else float(cfg.entropy_coeff)
-        )
-        if cfg.msg_entropy_coeff_final is not None:
-            msg_entropy_final = float(cfg.msg_entropy_coeff_final)
-        elif cfg.msg_entropy_coeff is None:
-            msg_entropy_final = float(cfg.entropy_coeff_final)
-        else:
-            msg_entropy_final = msg_entropy_initial
-        ppo.msg_entropy_coeff = _scheduled_value(
-            initial=msg_entropy_initial,
-            final=msg_entropy_final,
-            schedule=str(cfg.entropy_schedule),
-            progress=progress,
-        )
-
-        if int(cfg.num_envs) > 1:
-            vector_buffer, advantages, returns, responsiveness_updates = _collect_vectorized_rollout(
-                cfg=cfg,
-                envs=envs,
-                wrappers=wrappers,
-                agents=agents,
-                agent_ids=agent_ids,
-                sender_ids=sender_ids,
+            msg_entropy_initial = (
+                float(cfg.msg_entropy_coeff)
+                if cfg.msg_entropy_coeff is not None
+                else float(cfg.entropy_coeff)
             )
-            buffer = vector_buffer.flatten()
-            for agent_id, values_list in responsiveness_updates.items():
-                window_responsiveness[agent_id].extend(values_list)
-            if session_logger is not None:
-                for env_idx in range(int(cfg.num_envs)):
-                    session_logger.log_session(vector_buffer.to_single_env_buffer(env_idx))
-        else:
-            buffer = TrajectoryBuffer(
-                agent_ids=agent_ids,
-                T=cfg.T,
-                obs_dim=wrapper.obs_dim,
-                value_obs_dim=value_obs_dim,
-                comm_enabled=cfg.comm_enabled,
-                vocab_size=cfg.vocab_size,
-                sender_ids=sender_ids,
+            if cfg.msg_entropy_coeff_final is not None:
+                msg_entropy_final = float(cfg.msg_entropy_coeff_final)
+            elif cfg.msg_entropy_coeff is None:
+                msg_entropy_final = float(cfg.entropy_coeff_final)
+            else:
+                msg_entropy_final = msg_entropy_initial
+            ppo.msg_entropy_coeff = _scheduled_value(
+                initial=msg_entropy_initial,
+                final=msg_entropy_final,
+                schedule=str(cfg.entropy_schedule),
+                progress=progress,
             )
 
-            raw_obs = env.reset()
-            wrapper.reset(agent_ids)
-            current_messages = None
-            done = False
-            steps = 0
+            if int(cfg.num_envs) > 1:
+                vector_buffer, advantages, returns, responsiveness_updates = _collect_vectorized_rollout(
+                    cfg=cfg,
+                    env_backend=vector_env_backend,
+                    wrappers=wrappers,
+                    agents=agents,
+                    agent_ids=agent_ids,
+                    sender_ids=sender_ids,
+                )
+                buffer = vector_buffer.flatten()
+                for agent_id, values_list in responsiveness_updates.items():
+                    window_responsiveness[agent_id].extend(values_list)
+                if session_logger is not None:
+                    for env_idx in range(int(cfg.num_envs)):
+                        session_logger.log_session(vector_buffer.to_single_env_buffer(env_idx))
+            else:
+                buffer = TrajectoryBuffer(
+                    agent_ids=agent_ids,
+                    T=cfg.T,
+                    obs_dim=wrapper.obs_dim,
+                    value_obs_dim=value_obs_dim,
+                    comm_enabled=cfg.comm_enabled,
+                    vocab_size=cfg.vocab_size,
+                    sender_ids=sender_ids,
+                )
 
-            while not done and steps < cfg.T:
-                aug_obs = {
-                    agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
-                    for agent_id in agent_ids
-                }
+                raw_obs = env.reset()
+                wrapper.reset(agent_ids)
+                current_messages = None
+                done = False
+                steps = 0
 
-                message_actions = {}
-                message_log_probs = {}
-                if cfg.comm_enabled and len(sender_ids) > 0:
-                    proposed = {}
-                    for sender_id in sender_ids:
-                        msg, msg_lp, _msg_ent, _msg_probs = agents[sender_id].sample_message(
-                            aug_obs[sender_id]
-                        )
-                        proposed[sender_id] = msg
-                        message_actions[sender_id] = msg
-                        message_log_probs[sender_id] = msg_lp
-
-                    dropped = wrapper.apply_msg_dropout(proposed)
-                    if str(cfg.msg_training_intervention).strip().lower() == "none":
-                        for sender_id, msg in proposed.items():
-                            wrapper.update_msg_marginals(sender_id, msg)
-                        current_messages = dropped
-                    else:
-                        delivered = _apply_training_message_intervention(
-                            intervention=cfg.msg_training_intervention,
-                            delivered=dropped,
-                            vocab_size=cfg.vocab_size,
-                        )
-                        for sender_id, msg in delivered.items():
-                            wrapper.update_msg_marginals(sender_id, msg)
-                        current_messages = delivered
+                while not done and steps < cfg.T:
                     aug_obs = {
                         agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
                         for agent_id in agent_ids
                     }
 
-                intended_actions = {}
-                action_log_probs = {}
-                values = {}
-                listening_bonus = {agent_id: 0.0 for agent_id in agent_ids}
-                value_aug_obs = _build_value_aug_obs(aug_obs, steps, cfg, agent_ids)
-                for agent_id in agent_ids:
-                    action, action_lp, value, _ent, _ = agents[agent_id].sample_action(
-                        aug_obs[agent_id], value_obs=value_aug_obs[agent_id]
-                    )
-                    intended_actions[agent_id] = int(action)
-                    action_log_probs[agent_id] = float(action_lp)
-                    values[agent_id] = float(value)
-
+                    message_actions = {}
+                    message_log_probs = {}
                     if cfg.comm_enabled and len(sender_ids) > 0:
-                        obs_t = torch.tensor(
-                            aug_obs[agent_id],
-                            dtype=torch.float32,
-                            device=agents[agent_id].action_actor.net[0].weight.device,
-                        ).unsqueeze(0)
-                        probs_with = agents[agent_id].action_distribution(obs_t).squeeze(0)
-                        obs_no_msg = obs_t.clone()
-                        msg_start = wrapper.message_start_idx
-                        obs_no_msg[:, msg_start:] = 0.0
-                        probs_without = agents[agent_id].action_distribution(obs_no_msg).squeeze(0)
-                        eps = 1e-8
-                        kl = torch.sum(
-                            probs_with
-                            * (torch.log(probs_with + eps) - torch.log(probs_without + eps))
+                        proposed = {}
+                        for sender_id in sender_ids:
+                            msg, msg_lp, _msg_ent, _msg_probs = agents[sender_id].sample_message(
+                                aug_obs[sender_id]
+                            )
+                            proposed[sender_id] = msg
+                            message_actions[sender_id] = msg
+                            message_log_probs[sender_id] = msg_lp
+
+                        dropped = wrapper.apply_msg_dropout(proposed)
+                        if str(cfg.msg_training_intervention).strip().lower() == "none":
+                            for sender_id, msg in proposed.items():
+                                wrapper.update_msg_marginals(sender_id, msg)
+                            current_messages = dropped
+                        else:
+                            delivered = _apply_training_message_intervention(
+                                intervention=cfg.msg_training_intervention,
+                                delivered=dropped,
+                                vocab_size=cfg.vocab_size,
+                            )
+                            for sender_id, msg in delivered.items():
+                                wrapper.update_msg_marginals(sender_id, msg)
+                            current_messages = delivered
+                        aug_obs = {
+                            agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
+                            for agent_id in agent_ids
+                        }
+
+                    intended_actions = {}
+                    action_log_probs = {}
+                    values = {}
+                    listening_bonus = {agent_id: 0.0 for agent_id in agent_ids}
+                    value_aug_obs = _build_value_aug_obs(aug_obs, steps, cfg, agent_ids)
+                    for agent_id in agent_ids:
+                        action, action_lp, value, _ent, _ = agents[agent_id].sample_action(
+                            aug_obs[agent_id], value_obs=value_aug_obs[agent_id]
                         )
-                        listening_bonus[agent_id] = -float(kl.detach().cpu().item())
+                        intended_actions[agent_id] = int(action)
+                        action_log_probs[agent_id] = float(action_lp)
+                        values[agent_id] = float(value)
 
-                        if cfg.log_trainer_responsiveness:
-                            obs_marginal = obs_t.clone()
-                            msg_start = int(wrapper.message_start_idx)
-                            for s_idx, sender_id in enumerate(sender_ids):
-                                start = msg_start + s_idx * int(cfg.vocab_size)
-                                end = start + int(cfg.vocab_size)
-                                probs_msg = wrapper.msg_marginals.get(sender_id)
-                                if probs_msg is None:
-                                    probs_msg = (
-                                        np.ones((cfg.vocab_size,), dtype=np.float32)
-                                        / float(cfg.vocab_size)
-                                    )
-                                obs_marginal[:, start:end] = torch.tensor(
-                                    probs_msg,
-                                    dtype=torch.float32,
-                                    device=obs_t.device,
-                                ).unsqueeze(0)
-                            probs_marginal = agents[agent_id].action_distribution(obs_marginal).squeeze(0)
-                            kl_diag = torch.sum(
-                                probs_with
-                                * (torch.log(probs_with + eps) - torch.log(probs_marginal + eps))
-                            )
-                            window_responsiveness[agent_id].append(
-                                float(kl_diag.detach().cpu().item())
-                            )
-
-                raw_obs_next, rewards, done, infos = env.step(intended_actions)
-                rewards_raw = _to_float_rewards(rewards)
-                rewards_train = {
-                    agent_id: (rewards_raw[agent_id] / float(cfg.reward_scale))
-                    for agent_id in agent_ids
-                }
-                executed_actions = infos.get("executed_actions", intended_actions)
-                flips = infos.get("flips", {agent_id: False for agent_id in agent_ids})
-                true_f = float(infos.get("true_f", env.current_multiplier.item()))
-
-                wrapper.update(executed_actions)
-
-                buffer.store(
-                    obs=aug_obs,
-                    actions=intended_actions,
-                    rewards=rewards_train,
-                    raw_rewards=rewards_raw,
-                    values=values,
-                    log_probs=action_log_probs,
-                    done=bool(done),
-                    executed_actions=executed_actions,
-                    flips=flips,
-                    true_f=true_f,
-                    f_hats=raw_obs,
-                    messages=current_messages,
-                    value_obs=value_aug_obs,
-                    message_actions=message_actions if len(message_actions) > 0 else None,
-                    message_log_probs=message_log_probs if len(message_log_probs) > 0 else None,
-                    listening_bonus=listening_bonus,
-                )
-                raw_obs = raw_obs_next
-                steps += 1
-
-            if done:
-                last_values = np.zeros((cfg.n_agents,), dtype=np.float32)
-            else:
-                final_aug_obs = {
-                    agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
-                    for agent_id in agent_ids
-                }
-                final_value_obs = _build_value_aug_obs(final_aug_obs, steps, cfg, agent_ids)
-                last_values = np.array(
-                    [
-                        agents[agent_id]
-                        .value(
-                            torch.tensor(
-                                final_value_obs[agent_id],
+                        if cfg.comm_enabled and len(sender_ids) > 0:
+                            obs_t = torch.tensor(
+                                aug_obs[agent_id],
                                 dtype=torch.float32,
                                 device=agents[agent_id].action_actor.net[0].weight.device,
                             ).unsqueeze(0)
-                        )
-                        .detach()
-                        .cpu()
-                        .item()
+                            probs_with = agents[agent_id].action_distribution(obs_t).squeeze(0)
+                            obs_no_msg = obs_t.clone()
+                            msg_start = wrapper.message_start_idx
+                            obs_no_msg[:, msg_start:] = 0.0
+                            probs_without = agents[agent_id].action_distribution(obs_no_msg).squeeze(0)
+                            eps = 1e-8
+                            kl = torch.sum(
+                                probs_with
+                                * (torch.log(probs_with + eps) - torch.log(probs_without + eps))
+                            )
+                            listening_bonus[agent_id] = -float(kl.detach().cpu().item())
+
+                            if cfg.log_trainer_responsiveness:
+                                obs_marginal = obs_t.clone()
+                                msg_start = int(wrapper.message_start_idx)
+                                for s_idx, sender_id in enumerate(sender_ids):
+                                    start = msg_start + s_idx * int(cfg.vocab_size)
+                                    end = start + int(cfg.vocab_size)
+                                    probs_msg = wrapper.msg_marginals.get(sender_id)
+                                    if probs_msg is None:
+                                        probs_msg = (
+                                            np.ones((cfg.vocab_size,), dtype=np.float32)
+                                            / float(cfg.vocab_size)
+                                        )
+                                    obs_marginal[:, start:end] = torch.tensor(
+                                        probs_msg,
+                                        dtype=torch.float32,
+                                        device=obs_t.device,
+                                    ).unsqueeze(0)
+                                probs_marginal = agents[agent_id].action_distribution(
+                                    obs_marginal
+                                ).squeeze(0)
+                                kl_diag = torch.sum(
+                                    probs_with
+                                    * (
+                                        torch.log(probs_with + eps)
+                                        - torch.log(probs_marginal + eps)
+                                    )
+                                )
+                                window_responsiveness[agent_id].append(
+                                    float(kl_diag.detach().cpu().item())
+                                )
+
+                    raw_obs_next, rewards, done, infos = env.step(intended_actions)
+                    rewards_raw = _to_float_rewards(rewards)
+                    rewards_train = {
+                        agent_id: (rewards_raw[agent_id] / float(cfg.reward_scale))
                         for agent_id in agent_ids
-                    ],
-                    dtype=np.float32,
+                    }
+                    executed_actions = infos.get("executed_actions", intended_actions)
+                    flips = infos.get("flips", {agent_id: False for agent_id in agent_ids})
+                    true_f = float(infos.get("true_f", env.current_multiplier.item()))
+
+                    wrapper.update(executed_actions)
+
+                    buffer.store(
+                        obs=aug_obs,
+                        actions=intended_actions,
+                        rewards=rewards_train,
+                        raw_rewards=rewards_raw,
+                        values=values,
+                        log_probs=action_log_probs,
+                        done=bool(done),
+                        executed_actions=executed_actions,
+                        flips=flips,
+                        true_f=true_f,
+                        f_hats=raw_obs,
+                        messages=current_messages,
+                        value_obs=value_aug_obs,
+                        message_actions=message_actions if len(message_actions) > 0 else None,
+                        message_log_probs=message_log_probs if len(message_log_probs) > 0 else None,
+                        listening_bonus=listening_bonus,
+                    )
+                    raw_obs = raw_obs_next
+                    steps += 1
+
+                if done:
+                    last_values = np.zeros((cfg.n_agents,), dtype=np.float32)
+                else:
+                    final_aug_obs = {
+                        agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
+                        for agent_id in agent_ids
+                    }
+                    final_value_obs = _build_value_aug_obs(final_aug_obs, steps, cfg, agent_ids)
+                    last_values = np.array(
+                        [
+                            agents[agent_id]
+                            .value(
+                                torch.tensor(
+                                    final_value_obs[agent_id],
+                                    dtype=torch.float32,
+                                    device=agents[agent_id].action_actor.net[0].weight.device,
+                                ).unsqueeze(0)
+                            )
+                            .detach()
+                            .cpu()
+                            .item()
+                            for agent_id in agent_ids
+                        ],
+                        dtype=np.float32,
+                    )
+
+                advantages, returns = buffer.compute_gae(
+                    last_values=last_values, gamma=cfg.gamma, lam=cfg.lam
                 )
 
-            advantages, returns = buffer.compute_gae(
-                last_values=last_values, gamma=cfg.gamma, lam=cfg.lam
+            train_metrics = ppo.update(buffer, advantages, returns)
+            if not _safe_is_finite(train_metrics):
+                raise FloatingPointError(
+                    f"non-finite PPO metrics at episode {episode}: {train_metrics}"
+                )
+
+            if session_logger is not None and int(cfg.num_envs) == 1:
+                session_logger.log_session(buffer)
+
+            coop_rate = (
+                float(np.mean(buffer.executed_actions[: buffer.t])) if buffer.t > 0 else 0.0
             )
-        train_metrics = ppo.update(buffer, advantages, returns)
-        if not _safe_is_finite(train_metrics):
-            raise FloatingPointError(f"non-finite PPO metrics at episode {episode}: {train_metrics}")
-
-        if session_logger is not None and int(cfg.num_envs) == 1:
-            session_logger.log_session(buffer)
-
-        coop_rate = float(np.mean(buffer.executed_actions[: buffer.t])) if buffer.t > 0 else 0.0
-        avg_reward = float(np.mean(buffer.agent_rewards[: buffer.t])) if buffer.t > 0 else 0.0
-        episode_regime_acc = {
-            "competitive": _bucket(),
-            "mixed": _bucket(),
-            "cooperative": _bucket(),
-        }
-        if buffer.t > 0:
-            coop_per_step = np.mean(buffer.executed_actions[: buffer.t], axis=1)
-            reward_per_step = np.mean(buffer.agent_rewards[: buffer.t], axis=1)
-            for t in range(buffer.t):
-                f_val = float(buffer.true_f[t])
-                regime = _regime_label(f_val, n_agents=cfg.n_agents)
-                coop_t = float(coop_per_step[t])
-                rew_t = float(reward_per_step[t])
-
-                _update_bucket(episode_regime_acc, regime, coop_t, rew_t)
-                _update_bucket(cumulative_regime_acc, regime, coop_t, rew_t)
-                _update_bucket(window_regime_acc, regime, coop_t, rew_t)
-
-                f_key = f"{f_val:.3f}"
-                _update_bucket(cumulative_f_acc, f_key, coop_t, rew_t)
-                _update_bucket(window_f_acc, f_key, coop_t, rew_t)
-
-                if cfg.comm_enabled and len(sender_ids) > 0 and buffer.message_actions is not None:
-                    f_idx = f_key_to_idx.get(f_key)
-                    if f_idx is None:
-                        continue
-                    for sender_id in sender_ids:
-                        a_idx = sender_agent_idx[sender_id]
-                        # Use intended message (pre-dropout) to measure sender signaling capacity.
-                        msg = int(buffer.message_actions[t, a_idx])
-                        act = int(buffer.executed_actions[t, a_idx])
-                        if msg < 0 or msg >= cfg.vocab_size:
-                            continue
-                        if act < 0 or act > 1:
-                            continue
-                        window_comm_counts[sender_id]["msg_f"][msg, f_idx] += 1.0
-                        window_comm_counts[sender_id]["msg_action"][msg, act] += 1.0
-        episode_metrics = {
-            "episode": int(abs_episode1),
-            "episode_local": int(episode + 1),
-            "steps": buffer.t,
-            "num_envs": int(cfg.num_envs),
-            "coop_rate": coop_rate,
-            "avg_reward": avg_reward,
-            "lr_current": float(episode_lr),
-            "entropy_coeff_current": float(ppo.entropy_coeff),
-            "msg_entropy_coeff_current": float(ppo.msg_entropy_coeff),
-            **train_metrics,
-        }
-        for regime in ("competitive", "mixed", "cooperative"):
-            view = _readout_bucket(episode_regime_acc, regime)
-            episode_metrics[f"regime_{regime}_rounds"] = int(view["n_rounds"])
-            episode_metrics[f"regime_{regime}_coop"] = float(view["coop_rate"])
-            episode_metrics[f"regime_{regime}_reward"] = float(view["avg_reward"])
-        metrics_over_time.append(episode_metrics)
-        if wandb_run is not None:
-            wandb_run.log(episode_metrics, step=abs_episode1)
-
-        if (episode + 1) % max(1, cfg.log_interval) == 0:
-            print(
-                f"[episode {abs_episode1:04d}] "
-                f"coop={coop_rate:.3f} avg_reward={avg_reward:.3f} "
-                f"loss={train_metrics['loss_total']:.4f}"
-            )
-
-        if (episode + 1) % max(1, cfg.regime_log_interval) == 0:
-            summary_chunks = []
-            for regime in ("competitive", "mixed", "cooperative"):
-                win = _readout_bucket(window_regime_acc, regime)
-                summary_chunks.append(
-                    f"{regime[:4]}={win['coop_rate']:.3f}(n={int(win['n_rounds'])})"
-                )
-                _append_jsonl(
-                    cfg.metrics_jsonl_path,
-                    {
-                        "episode": int(abs_episode1),
-                        "seed": int(cfg.seed),
-                        "condition": str(cfg.condition_name),
-                        "scope": "regime",
-                        "key": regime,
-                        "window": "window",
-                        "n_rounds": int(win["n_rounds"]),
-                        "coop_rate": float(win["coop_rate"]),
-                        "avg_reward": float(win["avg_reward"]),
-                    },
-                )
-                cum = _readout_bucket(cumulative_regime_acc, regime)
-                _append_jsonl(
-                    cfg.metrics_jsonl_path,
-                    {
-                        "episode": int(abs_episode1),
-                        "seed": int(cfg.seed),
-                        "condition": str(cfg.condition_name),
-                        "scope": "regime",
-                        "key": regime,
-                        "window": "cumulative",
-                        "n_rounds": int(cum["n_rounds"]),
-                        "coop_rate": float(cum["coop_rate"]),
-                        "avg_reward": float(cum["avg_reward"]),
-                    },
-                )
-
-            for f_key in sorted(window_f_acc.keys(), key=float):
-                win = _readout_bucket(window_f_acc, f_key)
-                _append_jsonl(
-                    cfg.metrics_jsonl_path,
-                    {
-                        "episode": int(abs_episode1),
-                        "seed": int(cfg.seed),
-                        "condition": str(cfg.condition_name),
-                        "scope": "f_value",
-                        "key": str(f_key),
-                        "window": "window",
-                        "n_rounds": int(win["n_rounds"]),
-                        "coop_rate": float(win["coop_rate"]),
-                        "avg_reward": float(win["avg_reward"]),
-                    },
-                )
-            for f_key in sorted(cumulative_f_acc.keys(), key=float):
-                cum = _readout_bucket(cumulative_f_acc, f_key)
-                _append_jsonl(
-                    cfg.metrics_jsonl_path,
-                    {
-                        "episode": int(abs_episode1),
-                        "seed": int(cfg.seed),
-                        "condition": str(cfg.condition_name),
-                        "scope": "f_value",
-                        "key": str(f_key),
-                        "window": "cumulative",
-                        "n_rounds": int(cum["n_rounds"]),
-                        "coop_rate": float(cum["coop_rate"]),
-                        "avg_reward": float(cum["avg_reward"]),
-                    },
-                )
-
-            if cfg.comm_enabled and len(sender_ids) > 0:
-                all_msg_f = np.zeros((cfg.vocab_size, len(f_keys_sorted)), dtype=np.float64)
-                all_msg_action = np.zeros((cfg.vocab_size, 2), dtype=np.float64)
-                for sender_id in sender_ids:
-                    msg_f_counts = window_comm_counts[sender_id]["msg_f"]
-                    msg_action_counts = window_comm_counts[sender_id]["msg_action"]
-                    all_msg_f += msg_f_counts
-                    all_msg_action += msg_action_counts
-
-                    mi_stats_f = _mi_null_independence_stats(
-                        msg_f_counts,
-                        n_perms=cfg.mi_null_perms,
-                        alpha=cfg.mi_alpha,
-                        rng=mi_rng,
-                    )
-                    mi_stats_action = _mi_null_independence_stats(
-                        msg_action_counts,
-                        n_perms=cfg.mi_null_perms,
-                        alpha=cfg.mi_alpha,
-                        rng=mi_rng,
-                    )
-                    msg_entropy = _entropy_from_counts_1d(np.sum(msg_f_counts, axis=1))
-                    msg_entropy_max = float(np.log2(max(1, int(cfg.vocab_size))))
-                    _append_jsonl(
-                        cfg.metrics_jsonl_path,
-                        {
-                            "episode": int(abs_episode1),
-                            "seed": int(cfg.seed),
-                            "condition": str(cfg.condition_name),
-                            "scope": "comm",
-                            "key": sender_id,
-                            "window": "window",
-                            "metric": "mi_message_f",
-                            "mi": float(mi_stats_f["mi_observed"]),
-                            "mi_unit": "bits",
-                            "mi_perm_p95": float(mi_stats_f["mi_perm_p95"]),
-                            "mi_p_value": float(mi_stats_f["mi_p_value"]),
-                            "mi_significant": bool(mi_stats_f["mi_significant"]),
-                            "mi_null_method": "independence_multinomial",
-                            "mi_null_perms": int(cfg.mi_null_perms),
-                            "h_message": float(msg_entropy),
-                            "h_message_max": float(msg_entropy_max),
-                            "n_pairs": int(np.sum(msg_f_counts)),
-                        },
-                    )
-                    _append_jsonl(
-                        cfg.metrics_jsonl_path,
-                        {
-                            "episode": int(abs_episode1),
-                            "seed": int(cfg.seed),
-                            "condition": str(cfg.condition_name),
-                            "scope": "comm",
-                            "key": sender_id,
-                            "window": "window",
-                            "metric": "mi_message_action",
-                            "mi": float(mi_stats_action["mi_observed"]),
-                            "mi_unit": "bits",
-                            "mi_perm_p95": float(mi_stats_action["mi_perm_p95"]),
-                            "mi_p_value": float(mi_stats_action["mi_p_value"]),
-                            "mi_significant": bool(mi_stats_action["mi_significant"]),
-                            "mi_null_method": "independence_multinomial",
-                            "mi_null_perms": int(cfg.mi_null_perms),
-                            "h_message": float(msg_entropy),
-                            "h_message_max": float(msg_entropy_max),
-                            "n_pairs": int(np.sum(msg_action_counts)),
-                        },
-                    )
-
-                mi_all_stats_f = _mi_null_independence_stats(
-                    all_msg_f,
-                    n_perms=cfg.mi_null_perms,
-                    alpha=cfg.mi_alpha,
-                    rng=mi_rng,
-                )
-                mi_all_stats_action = _mi_null_independence_stats(
-                    all_msg_action,
-                    n_perms=cfg.mi_null_perms,
-                    alpha=cfg.mi_alpha,
-                    rng=mi_rng,
-                )
-                msg_all_entropy = _entropy_from_counts_1d(np.sum(all_msg_f, axis=1))
-                msg_entropy_max = float(np.log2(max(1, int(cfg.vocab_size))))
-                mi_all_msg_f = float(mi_all_stats_f["mi_observed"])
-                mi_all_msg_action = float(mi_all_stats_action["mi_observed"])
-                summary_chunks.append(f"mi(m;f)={mi_all_msg_f:.3f}")
-                summary_chunks.append(f"mi(m;a)={mi_all_msg_action:.3f}")
-                all_resp = np.array([], dtype=np.float64)
-                if cfg.log_trainer_responsiveness:
-                    all_resp = np.array(
-                        [x for values in window_responsiveness.values() for x in values],
-                        dtype=np.float64,
-                    )
-                if all_resp.size > 0:
-                    summary_chunks.append(f"resp={float(np.mean(all_resp)):.3f}")
-                _append_jsonl(
-                    cfg.metrics_jsonl_path,
-                    {
-                        "episode": int(abs_episode1),
-                        "seed": int(cfg.seed),
-                        "condition": str(cfg.condition_name),
-                        "scope": "comm",
-                        "key": "all_senders",
-                        "window": "window",
-                        "metric": "mi_message_f",
-                        "mi": float(mi_all_msg_f),
-                        "mi_unit": "bits",
-                        "mi_perm_p95": float(mi_all_stats_f["mi_perm_p95"]),
-                        "mi_p_value": float(mi_all_stats_f["mi_p_value"]),
-                        "mi_significant": bool(mi_all_stats_f["mi_significant"]),
-                        "mi_null_method": "independence_multinomial",
-                        "mi_null_perms": int(cfg.mi_null_perms),
-                        "h_message": float(msg_all_entropy),
-                        "h_message_max": float(msg_entropy_max),
-                        "n_pairs": int(np.sum(all_msg_f)),
-                    },
-                )
-                _append_jsonl(
-                    cfg.metrics_jsonl_path,
-                    {
-                        "episode": int(abs_episode1),
-                        "seed": int(cfg.seed),
-                        "condition": str(cfg.condition_name),
-                        "scope": "comm",
-                        "key": "all_senders",
-                        "window": "window",
-                        "metric": "mi_message_action",
-                        "mi": float(mi_all_msg_action),
-                        "mi_unit": "bits",
-                        "mi_perm_p95": float(mi_all_stats_action["mi_perm_p95"]),
-                        "mi_p_value": float(mi_all_stats_action["mi_p_value"]),
-                        "mi_significant": bool(mi_all_stats_action["mi_significant"]),
-                        "mi_null_method": "independence_multinomial",
-                        "mi_null_perms": int(cfg.mi_null_perms),
-                        "h_message": float(msg_all_entropy),
-                        "h_message_max": float(msg_entropy_max),
-                        "n_pairs": int(np.sum(all_msg_action)),
-                    },
-                )
-                if cfg.log_trainer_responsiveness:
-                    for agent_id in agent_ids:
-                        agent_resp = np.asarray(window_responsiveness.get(agent_id, []), dtype=np.float64)
-                        if agent_resp.size == 0:
-                            continue
-                        _append_jsonl(
-                            cfg.metrics_jsonl_path,
-                            {
-                                "episode": int(abs_episode1),
-                                "seed": int(cfg.seed),
-                                "condition": str(cfg.condition_name),
-                                "scope": "comm",
-                                "key": str(agent_id),
-                                "window": "window",
-                                "metric": "responsiveness_kl",
-                                "value": float(np.mean(agent_resp)),
-                                "value_std": float(np.std(agent_resp)),
-                                "n_pairs": int(agent_resp.size),
-                            },
-                        )
-                    if all_resp.size > 0:
-                        _append_jsonl(
-                            cfg.metrics_jsonl_path,
-                            {
-                                "episode": int(abs_episode1),
-                                "seed": int(cfg.seed),
-                                "condition": str(cfg.condition_name),
-                                "scope": "comm",
-                                "key": "all_agents",
-                                "window": "window",
-                                "metric": "responsiveness_kl",
-                                "value": float(np.mean(all_resp)),
-                                "value_std": float(np.std(all_resp)),
-                                "n_pairs": int(all_resp.size),
-                            },
-                        )
-
-            print(
-                f"[regime @ episode {abs_episode1:04d}] " + " ".join(summary_chunks)
-            )
-            window_regime_acc = {
+            avg_reward = float(np.mean(buffer.agent_rewards[: buffer.t])) if buffer.t > 0 else 0.0
+            episode_regime_acc = {
                 "competitive": _bucket(),
                 "mixed": _bucket(),
                 "cooperative": _bucket(),
             }
-            window_f_acc = {}
-            if cfg.comm_enabled and len(sender_ids) > 0:
-                window_comm_counts = _new_comm_window_counts()
-                if cfg.log_trainer_responsiveness:
-                    window_responsiveness = {agent_id: [] for agent_id in agent_ids}
+            if buffer.t > 0:
+                coop_per_step = np.mean(buffer.executed_actions[: buffer.t], axis=1)
+                reward_per_step = np.mean(buffer.agent_rewards[: buffer.t], axis=1)
+                for t in range(buffer.t):
+                    f_val = float(buffer.true_f[t])
+                    regime = _regime_label(f_val, n_agents=cfg.n_agents)
+                    coop_t = float(coop_per_step[t])
+                    rew_t = float(reward_per_step[t])
 
-        if (
-            cfg.checkpoint_interval > 0
-            and abs_episode1 % int(cfg.checkpoint_interval) == 0
-            and (episode + 1) < cfg.n_episodes
-        ):
-            ckpt_path = _checkpoint_with_episode(cfg.save_path, abs_episode1)
-            ckpt_cfg = TrainConfig(**cfg.__dict__)
-            ckpt_cfg.save_path = ckpt_path
-            _save_agents(ckpt_path, agents, ckpt_cfg)
-            print(f"[checkpoint] saved intermediate checkpoint: {ckpt_path}")
+                    _update_bucket(episode_regime_acc, regime, coop_t, rew_t)
+                    _update_bucket(cumulative_regime_acc, regime, coop_t, rew_t)
+                    _update_bucket(window_regime_acc, regime, coop_t, rew_t)
 
-        # Early stopping on avg_reward if enabled.
-        if cfg.early_stop_patience > 0:
-            current = avg_reward
-            if current > best_metric + cfg.early_stop_min_delta:
-                best_metric = current
-                stale_epochs = 0
-            else:
-                stale_epochs += 1
-                if stale_epochs >= cfg.early_stop_patience:
-                    print(
-                        f"[early-stop] stopping at episode {abs_episode1} "
-                        f"(best_avg_reward={best_metric:.4f})"
+                    f_key = f"{f_val:.3f}"
+                    _update_bucket(cumulative_f_acc, f_key, coop_t, rew_t)
+                    _update_bucket(window_f_acc, f_key, coop_t, rew_t)
+
+                    if cfg.comm_enabled and len(sender_ids) > 0 and buffer.message_actions is not None:
+                        f_idx = f_key_to_idx.get(f_key)
+                        if f_idx is None:
+                            continue
+                        for sender_id in sender_ids:
+                            a_idx = sender_agent_idx[sender_id]
+                            msg = int(buffer.message_actions[t, a_idx])
+                            act = int(buffer.executed_actions[t, a_idx])
+                            if msg < 0 or msg >= cfg.vocab_size:
+                                continue
+                            if act < 0 or act > 1:
+                                continue
+                            window_comm_counts[sender_id]["msg_f"][msg, f_idx] += 1.0
+                            window_comm_counts[sender_id]["msg_action"][msg, act] += 1.0
+
+            episode_metrics = {
+                "episode": int(abs_episode1),
+                "episode_local": int(local_episode1),
+                "update_local": int(episode + 1),
+                "steps": buffer.t,
+                "num_envs": int(cfg.num_envs),
+                "coop_rate": coop_rate,
+                "avg_reward": avg_reward,
+                "lr_current": float(episode_lr),
+                "entropy_coeff_current": float(ppo.entropy_coeff),
+                "msg_entropy_coeff_current": float(ppo.msg_entropy_coeff),
+                **train_metrics,
+            }
+            for regime in ("competitive", "mixed", "cooperative"):
+                view = _readout_bucket(episode_regime_acc, regime)
+                episode_metrics[f"regime_{regime}_rounds"] = int(view["n_rounds"])
+                episode_metrics[f"regime_{regime}_coop"] = float(view["coop_rate"])
+                episode_metrics[f"regime_{regime}_reward"] = float(view["avg_reward"])
+            metrics_over_time.append(episode_metrics)
+            if wandb_run is not None:
+                wandb_run.log(episode_metrics, step=abs_episode1)
+
+            if int(abs_episode1) % max(1, int(cfg.log_interval)) == 0:
+                print(
+                    f"[episode {abs_episode1:04d}] "
+                    f"coop={coop_rate:.3f} avg_reward={avg_reward:.3f} "
+                    f"loss={train_metrics['loss_total']:.4f}"
+                )
+
+            if int(abs_episode1) % max(1, int(cfg.regime_log_interval)) == 0:
+                summary_chunks = []
+                for regime in ("competitive", "mixed", "cooperative"):
+                    win = _readout_bucket(window_regime_acc, regime)
+                    summary_chunks.append(
+                        f"{regime[:4]}={win['coop_rate']:.3f}(n={int(win['n_rounds'])})"
                     )
-                    break
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(abs_episode1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "regime",
+                            "key": regime,
+                            "window": "window",
+                            "n_rounds": int(win["n_rounds"]),
+                            "coop_rate": float(win["coop_rate"]),
+                            "avg_reward": float(win["avg_reward"]),
+                        },
+                    )
+                    cum = _readout_bucket(cumulative_regime_acc, regime)
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(abs_episode1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "regime",
+                            "key": regime,
+                            "window": "cumulative",
+                            "n_rounds": int(cum["n_rounds"]),
+                            "coop_rate": float(cum["coop_rate"]),
+                            "avg_reward": float(cum["avg_reward"]),
+                        },
+                    )
 
-    _save_agents(cfg.save_path, agents, cfg)
-    if wandb_run is not None:
-        wandb_run.finish()
+                for f_key in sorted(window_f_acc.keys(), key=float):
+                    win = _readout_bucket(window_f_acc, f_key)
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(abs_episode1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "f_value",
+                            "key": str(f_key),
+                            "window": "window",
+                            "n_rounds": int(win["n_rounds"]),
+                            "coop_rate": float(win["coop_rate"]),
+                            "avg_reward": float(win["avg_reward"]),
+                        },
+                    )
+                for f_key in sorted(cumulative_f_acc.keys(), key=float):
+                    cum = _readout_bucket(cumulative_f_acc, f_key)
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(abs_episode1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "f_value",
+                            "key": str(f_key),
+                            "window": "cumulative",
+                            "n_rounds": int(cum["n_rounds"]),
+                            "coop_rate": float(cum["coop_rate"]),
+                            "avg_reward": float(cum["avg_reward"]),
+                        },
+                    )
 
-    if session_logger is not None and cfg.consolidate_sessions:
-        consolidated = session_logger.consolidate(delete_parts=False)
-        print(f"[session-logger] consolidated sessions -> {consolidated}")
+                if cfg.comm_enabled and len(sender_ids) > 0:
+                    all_msg_f = np.zeros((cfg.vocab_size, len(f_keys_sorted)), dtype=np.float64)
+                    all_msg_action = np.zeros((cfg.vocab_size, 2), dtype=np.float64)
+                    for sender_id in sender_ids:
+                        msg_f_counts = window_comm_counts[sender_id]["msg_f"]
+                        msg_action_counts = window_comm_counts[sender_id]["msg_action"]
+                        all_msg_f += msg_f_counts
+                        all_msg_action += msg_action_counts
 
-    if cfg.run_regime_audit:
-        env_cfg = dict(
-            n_agents=cfg.n_agents,
-            num_game_iterations=cfg.T,
-            mult_fact=list(cfg.F),
-            F=list(cfg.F),
-            uncertainties=list(cfg.sigmas),
-            fraction=False,
-            rho=cfg.rho,
-            epsilon_tremble=cfg.epsilon_tremble,
-            endowment=cfg.endowment,
+                        mi_stats_f = _mi_null_independence_stats(
+                            msg_f_counts,
+                            n_perms=cfg.mi_null_perms,
+                            alpha=cfg.mi_alpha,
+                            rng=mi_rng,
+                        )
+                        mi_stats_action = _mi_null_independence_stats(
+                            msg_action_counts,
+                            n_perms=cfg.mi_null_perms,
+                            alpha=cfg.mi_alpha,
+                            rng=mi_rng,
+                        )
+                        msg_entropy = _entropy_from_counts_1d(np.sum(msg_f_counts, axis=1))
+                        msg_entropy_max = float(np.log2(max(1, int(cfg.vocab_size))))
+                        _append_jsonl(
+                            cfg.metrics_jsonl_path,
+                            {
+                                "episode": int(abs_episode1),
+                                "seed": int(cfg.seed),
+                                "condition": str(cfg.condition_name),
+                                "scope": "comm",
+                                "key": sender_id,
+                                "window": "window",
+                                "metric": "mi_message_f",
+                                "mi": float(mi_stats_f["mi_observed"]),
+                                "mi_unit": "bits",
+                                "mi_perm_p95": float(mi_stats_f["mi_perm_p95"]),
+                                "mi_p_value": float(mi_stats_f["mi_p_value"]),
+                                "mi_significant": bool(mi_stats_f["mi_significant"]),
+                                "mi_null_method": "independence_multinomial",
+                                "mi_null_perms": int(cfg.mi_null_perms),
+                                "h_message": float(msg_entropy),
+                                "h_message_max": float(msg_entropy_max),
+                                "n_pairs": int(np.sum(msg_f_counts)),
+                            },
+                        )
+                        _append_jsonl(
+                            cfg.metrics_jsonl_path,
+                            {
+                                "episode": int(abs_episode1),
+                                "seed": int(cfg.seed),
+                                "condition": str(cfg.condition_name),
+                                "scope": "comm",
+                                "key": sender_id,
+                                "window": "window",
+                                "metric": "mi_message_action",
+                                "mi": float(mi_stats_action["mi_observed"]),
+                                "mi_unit": "bits",
+                                "mi_perm_p95": float(mi_stats_action["mi_perm_p95"]),
+                                "mi_p_value": float(mi_stats_action["mi_p_value"]),
+                                "mi_significant": bool(mi_stats_action["mi_significant"]),
+                                "mi_null_method": "independence_multinomial",
+                                "mi_null_perms": int(cfg.mi_null_perms),
+                                "h_message": float(msg_entropy),
+                                "h_message_max": float(msg_entropy_max),
+                                "n_pairs": int(np.sum(msg_action_counts)),
+                            },
+                        )
+
+                    mi_all_stats_f = _mi_null_independence_stats(
+                        all_msg_f,
+                        n_perms=cfg.mi_null_perms,
+                        alpha=cfg.mi_alpha,
+                        rng=mi_rng,
+                    )
+                    mi_all_stats_action = _mi_null_independence_stats(
+                        all_msg_action,
+                        n_perms=cfg.mi_null_perms,
+                        alpha=cfg.mi_alpha,
+                        rng=mi_rng,
+                    )
+                    msg_all_entropy = _entropy_from_counts_1d(np.sum(all_msg_f, axis=1))
+                    msg_entropy_max = float(np.log2(max(1, int(cfg.vocab_size))))
+                    mi_all_msg_f = float(mi_all_stats_f["mi_observed"])
+                    mi_all_msg_action = float(mi_all_stats_action["mi_observed"])
+                    summary_chunks.append(f"mi(m;f)={mi_all_msg_f:.3f}")
+                    summary_chunks.append(f"mi(m;a)={mi_all_msg_action:.3f}")
+                    all_resp = np.array([], dtype=np.float64)
+                    if cfg.log_trainer_responsiveness:
+                        all_resp = np.array(
+                            [x for values in window_responsiveness.values() for x in values],
+                            dtype=np.float64,
+                        )
+                    if all_resp.size > 0:
+                        summary_chunks.append(f"resp={float(np.mean(all_resp)):.3f}")
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(abs_episode1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "comm",
+                            "key": "all_senders",
+                            "window": "window",
+                            "metric": "mi_message_f",
+                            "mi": float(mi_all_msg_f),
+                            "mi_unit": "bits",
+                            "mi_perm_p95": float(mi_all_stats_f["mi_perm_p95"]),
+                            "mi_p_value": float(mi_all_stats_f["mi_p_value"]),
+                            "mi_significant": bool(mi_all_stats_f["mi_significant"]),
+                            "mi_null_method": "independence_multinomial",
+                            "mi_null_perms": int(cfg.mi_null_perms),
+                            "h_message": float(msg_all_entropy),
+                            "h_message_max": float(msg_entropy_max),
+                            "n_pairs": int(np.sum(all_msg_f)),
+                        },
+                    )
+                    _append_jsonl(
+                        cfg.metrics_jsonl_path,
+                        {
+                            "episode": int(abs_episode1),
+                            "seed": int(cfg.seed),
+                            "condition": str(cfg.condition_name),
+                            "scope": "comm",
+                            "key": "all_senders",
+                            "window": "window",
+                            "metric": "mi_message_action",
+                            "mi": float(mi_all_msg_action),
+                            "mi_unit": "bits",
+                            "mi_perm_p95": float(mi_all_stats_action["mi_perm_p95"]),
+                            "mi_p_value": float(mi_all_stats_action["mi_p_value"]),
+                            "mi_significant": bool(mi_all_stats_action["mi_significant"]),
+                            "mi_null_method": "independence_multinomial",
+                            "mi_null_perms": int(cfg.mi_null_perms),
+                            "h_message": float(msg_all_entropy),
+                            "h_message_max": float(msg_entropy_max),
+                            "n_pairs": int(np.sum(all_msg_action)),
+                        },
+                    )
+                    if cfg.log_trainer_responsiveness:
+                        for agent_id in agent_ids:
+                            agent_resp = np.asarray(
+                                window_responsiveness.get(agent_id, []), dtype=np.float64
+                            )
+                            if agent_resp.size == 0:
+                                continue
+                            _append_jsonl(
+                                cfg.metrics_jsonl_path,
+                                {
+                                    "episode": int(abs_episode1),
+                                    "seed": int(cfg.seed),
+                                    "condition": str(cfg.condition_name),
+                                    "scope": "comm",
+                                    "key": str(agent_id),
+                                    "window": "window",
+                                    "metric": "responsiveness_kl",
+                                    "value": float(np.mean(agent_resp)),
+                                    "value_std": float(np.std(agent_resp)),
+                                    "n_pairs": int(agent_resp.size),
+                                },
+                            )
+                        if all_resp.size > 0:
+                            _append_jsonl(
+                                cfg.metrics_jsonl_path,
+                                {
+                                    "episode": int(abs_episode1),
+                                    "seed": int(cfg.seed),
+                                    "condition": str(cfg.condition_name),
+                                    "scope": "comm",
+                                    "key": "all_agents",
+                                    "window": "window",
+                                    "metric": "responsiveness_kl",
+                                    "value": float(np.mean(all_resp)),
+                                    "value_std": float(np.std(all_resp)),
+                                    "n_pairs": int(all_resp.size),
+                                },
+                            )
+
+                print(f"[regime @ episode {abs_episode1:04d}] " + " ".join(summary_chunks))
+                window_regime_acc = {
+                    "competitive": _bucket(),
+                    "mixed": _bucket(),
+                    "cooperative": _bucket(),
+                }
+                window_f_acc = {}
+                if cfg.comm_enabled and len(sender_ids) > 0:
+                    window_comm_counts = _new_comm_window_counts()
+                    if cfg.log_trainer_responsiveness:
+                        window_responsiveness = {agent_id: [] for agent_id in agent_ids}
+
+            if (
+                cfg.checkpoint_interval > 0
+                and abs_episode1 % int(cfg.checkpoint_interval) == 0
+                and int(abs_episode1) < (int(cfg.episode_offset) + int(cfg.n_episodes))
+            ):
+                ckpt_path = _checkpoint_with_episode(cfg.save_path, abs_episode1)
+                ckpt_cfg = TrainConfig(**cfg.__dict__)
+                ckpt_cfg.save_path = ckpt_path
+                _save_agents(
+                    ckpt_path,
+                    agents,
+                    ckpt_cfg,
+                    abs_episode=int(abs_episode1),
+                    local_episode=int(local_episode1),
+                )
+                print(f"[checkpoint] saved intermediate checkpoint: {ckpt_path}")
+
+            if cfg.early_stop_patience > 0:
+                current = avg_reward
+                if current > best_metric + cfg.early_stop_min_delta:
+                    best_metric = current
+                    stale_epochs = 0
+                else:
+                    stale_epochs += 1
+                    if stale_epochs >= cfg.early_stop_patience:
+                        print(
+                            f"[early-stop] stopping at episode {abs_episode1} "
+                            f"(best_avg_reward={best_metric:.4f})"
+                        )
+                        break
+
+        _save_agents(
+            cfg.save_path,
+            agents,
+            cfg,
+            abs_episode=int(last_abs_episode),
+            local_episode=int(last_local_episode),
         )
-        audit = regime_audit(env_cfg, n_sessions=cfg.audit_sessions)
-        print("[regime-audit]", json.dumps(audit))
+        if wandb_run is not None:
+            wandb_run.finish()
 
-    return metrics_over_time
+        if session_logger is not None and cfg.consolidate_sessions:
+            consolidated = session_logger.consolidate(delete_parts=False)
+            print(f"[session-logger] consolidated sessions -> {consolidated}")
+
+        if cfg.run_regime_audit:
+            audit = regime_audit(_make_env_cfg(cfg), n_sessions=cfg.audit_sessions)
+            print("[regime-audit]", json.dumps(audit))
+
+        return metrics_over_time
+    finally:
+        if vector_env_backend is not None:
+            vector_env_backend.close()
+        elif env is not None:
+            try:
+                env.close()
+            except Exception:
+                pass
 
 
 def train(config: TrainConfig):
@@ -1434,6 +1604,25 @@ def parse_args():
     parser.add_argument("--T", type=int, default=100)
     parser.add_argument("--n_episodes", type=int, default=100)
     parser.add_argument("--num_envs", type=int, default=1)
+    parser.add_argument(
+        "--env_backend",
+        type=str,
+        default="serial",
+        choices=["serial", "subproc"],
+        help="Vectorized environment execution backend.",
+    )
+    parser.add_argument(
+        "--env_start_method",
+        type=str,
+        default="spawn",
+        choices=["spawn", "forkserver", "fork"],
+        help="Multiprocessing start method for --env_backend=subproc.",
+    )
+    parser.add_argument(
+        "--count_env_episodes",
+        action="store_true",
+        help="Interpret n_episodes, episode_offset, and schedule/checkpoint intervals in environment episodes.",
+    )
     parser.add_argument("--endowment", type=float, default=4.0)
     parser.add_argument("--F", nargs="*", type=float, default=[0.5, 1.5, 2.5, 3.5, 5.0])
     parser.add_argument("--sigmas", nargs="*", type=float, default=[0.5, 0.5, 0.5, 0.5])
@@ -1487,6 +1676,12 @@ def parse_args():
     parser.add_argument("--log_interval", type=int, default=10)
     parser.add_argument("--save_path", type=str, default="outputs/ppo_agents.pt")
     parser.add_argument("--init_ckpt", type=str, default="")
+    parser.add_argument(
+        "--resume_ckpt",
+        type=str,
+        default="",
+        help="Restore model weights and optimizer state from a training checkpoint.",
+    )
     parser.add_argument("--reward_scale", type=float, default=20.0)
     parser.add_argument(
         "--lr_schedule",
@@ -1528,6 +1723,9 @@ def args_to_config(args) -> TrainConfig:
         T=args.T,
         n_episodes=args.n_episodes,
         num_envs=args.num_envs,
+        count_env_episodes=bool(args.count_env_episodes),
+        env_backend=args.env_backend,
+        env_start_method=args.env_start_method,
         endowment=args.endowment,
         F=tuple(args.F),
         sigmas=tuple(args.sigmas),
@@ -1561,6 +1759,7 @@ def args_to_config(args) -> TrainConfig:
         log_interval=args.log_interval,
         save_path=args.save_path,
         init_ckpt=args.init_ckpt,
+        resume_ckpt=args.resume_ckpt,
         reward_scale=args.reward_scale,
         lr_schedule=args.lr_schedule,
         min_lr=args.min_lr,
@@ -1588,6 +1787,8 @@ def args_to_config(args) -> TrainConfig:
         raise ValueError(f"len(sigmas) must equal n_agents ({cfg.n_agents})")
     if cfg.num_envs <= 0:
         raise ValueError("num_envs must be > 0")
+    if str(cfg.init_ckpt or "").strip() and str(cfg.resume_ckpt or "").strip():
+        raise ValueError("init_ckpt and resume_ckpt are mutually exclusive")
     if cfg.reward_scale <= 0:
         raise ValueError("reward_scale must be > 0")
     if float(cfg.entropy_coeff_final) < 0.0:
@@ -1620,6 +1821,31 @@ def args_to_config(args) -> TrainConfig:
         raise ValueError(
             "schedule_total_episodes must be >= episode_offset + n_episodes"
         )
+    if bool(cfg.count_env_episodes) and int(cfg.num_envs) > 1:
+        for value, label in (
+            (cfg.n_episodes, "n_episodes"),
+            (cfg.episode_offset, "episode_offset"),
+        ):
+            if int(value) % int(cfg.num_envs) != 0:
+                raise ValueError(
+                    f"{label} must be divisible by num_envs when count_env_episodes is enabled"
+                )
+        if int(cfg.schedule_total_episodes) > 0 and int(cfg.schedule_total_episodes) % int(cfg.num_envs) != 0:
+            raise ValueError(
+                "schedule_total_episodes must be divisible by num_envs when count_env_episodes is enabled"
+            )
+        if int(cfg.log_interval) % int(cfg.num_envs) != 0:
+            raise ValueError(
+                "log_interval must be divisible by num_envs when count_env_episodes is enabled"
+            )
+        if int(cfg.regime_log_interval) % int(cfg.num_envs) != 0:
+            raise ValueError(
+                "regime_log_interval must be divisible by num_envs when count_env_episodes is enabled"
+            )
+        if int(cfg.checkpoint_interval) > 0 and int(cfg.checkpoint_interval) % int(cfg.num_envs) != 0:
+            raise ValueError(
+                "checkpoint_interval must be divisible by num_envs when count_env_episodes is enabled"
+            )
     if cfg.regime_log_interval <= 0:
         raise ValueError("regime_log_interval must be > 0")
     if cfg.checkpoint_interval < 0:

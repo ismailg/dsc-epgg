@@ -19,6 +19,24 @@ Example Outcome:
 - Under **asymmetric uncertainty**, agents may exploit communication.  
 - Agents trained across multiple incentive environments learn richer strategies that **generalize** better to unseen settings.
 
+## Current Data Location Guide
+
+This repo now contains the newer straight vectorized phase-3 result family. It should be read
+alongside the older staged/warm-start family in
+[`/Users/mbp17/POSTDOC/NPS26/dsc-epgg`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg), not confused with it.
+
+Start with:
+
+- [`DATA_MAP.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/DATA_MAP.md)
+- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md)
+
+Use the following rule:
+
+- `phase3_vecstraight` = the newer straight `0->150k` vectorized family in this repo
+- `phase3_staged` = the older manuscript-facing family in `dsc-epgg`
+- never reuse intervention or mechanism claims across those families unless the analysis was rerun
+  on the target family
+
 ## Project Features & Repository Structure
 
 - **Environments**: Extended Public Goods Game (EPGG) with cooperative/mixed/competitive incentives.    

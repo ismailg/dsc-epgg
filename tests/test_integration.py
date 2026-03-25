@@ -59,3 +59,20 @@ def test_full_loop_runs_vectorized(tmp_path):
     assert (tmp_path / "agents_vec.pt").exists()
     assert all(int(row["num_envs"]) == 2 for row in metrics)
     assert all(int(row["steps"]) == 12 for row in metrics)
+
+
+def test_full_loop_runs_vectorized_subproc(tmp_path):
+    cfg = minimal_test_config(
+        n_episodes=2,
+        T=5,
+        num_envs=2,
+        env_backend="subproc",
+        env_start_method="spawn",
+        save_path=str(tmp_path / "agents_vec_subproc.pt"),
+        seed=654,
+    )
+    metrics = train(cfg)
+    assert len(metrics) == 2
+    assert (tmp_path / "agents_vec_subproc.pt").exists()
+    assert all(int(row["num_envs"]) == 2 for row in metrics)
+    assert all(int(row["steps"]) == 10 for row in metrics)
