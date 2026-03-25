@@ -10,7 +10,7 @@ format:
     pdf-engine: xelatex
     include-in-header:
       - text: |
-          \usepackage[preprint]{neurips_2025}
+          \usepackage{neurips_2025}
           \usepackage{booktabs}
           \usepackage{amsfonts}
           \usepackage{amsmath}

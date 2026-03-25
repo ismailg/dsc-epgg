@@ -9,30 +9,33 @@ format:
 
 ```{=latex}
 \begin{abstract}
-Emergent communication in multi-agent reinforcement learning is often evaluated with endpoint metrics such as cooperation, mutual information, or message--action correlations measured at the final checkpoint. Under independent decentralized learning, however, such metrics can conflate two distinct questions: whether message content shaped the training trajectory, and whether the frozen endpoint policy uses the online message stream as a robust, sender-consistent, and behaviorally useful code. We introduce \emph{same-checkpoint continuation controls} to separate these questions: identical learned checkpoints are forked into learned, random, and silent channel modes, and their downstream outcomes are compared during continued training. As a case study, we apply this design to a four-agent extended public goods game with hidden regime switching and noisy private observations (15 seeds). Same-checkpoint controls show that learned messages retain a clear continued-learning advantage in the mixed-motive regime, outperforming silence and random channels by roughly 12--19 percentage points, while all channel modes perform similarly in the cooperation-dominant regime. A matched-stat sender-shuffle continuation control shrinks but does not erase the mixed-regime advantage, suggesting a mixture of genuine state-linked message value and broader channel dependence. Complementary frozen-checkpoint interventions show that this training-time benefit does not translate into a robust endpoint protocol: sender-shuffled messages outperform natural messages, and sender-specific causal probes reveal sizable local effects that cancel in aggregate. These results show that communication benefit and learning dynamics can be more cleanly disentangled, and that continued-learning value and endpoint protocol coherence can come apart in ways that endpoint-only evaluation misses.
+Emergent communication in multi-agent reinforcement learning is often evaluated with endpoint metrics such as cooperation, mutual information, or message--action correlations measured at the final checkpoint. Under independent decentralized learning, however, such metrics can conflate two distinct questions: whether message content shaped the training trajectory, and whether the frozen endpoint policy uses the online message stream as a robust, sender-consistent, and behaviorally useful code. We introduce \emph{same-checkpoint continuation controls} to probe these questions more directly: identical learned checkpoints are forked into learned, random, and silent channel modes, and their downstream outcomes are compared during continued training. As a case study, we apply this design to a four-agent extended public goods game with hidden regime switching and noisy private observations (15 seeds). Same-checkpoint controls show that learned messages retain a clear continued-learning advantage over silence and simple random channels in the mixed-motive regime, outperforming them by roughly 12--19 percentage points. A matched-stat sender-shuffle continuation control shrinks that advantage and its confidence interval overlaps zero, suggesting a mixture of genuine state-linked message value and broader channel dependence. In the cooperation-dominant regime, learned message content shows no corresponding advantage, and sender-shuffle can outperform learned communication. Complementary frozen-checkpoint interventions show that this training-time benefit does not translate into a robust endpoint protocol: sender-shuffled messages outperform natural messages, and sender-specific causal probes reveal sizable local effects that cancel in aggregate. These results show that communication benefit and learning dynamics can be more cleanly distinguished, and that continued-learning value and endpoint protocol coherence can come apart in ways that endpoint-only evaluation misses.
 \end{abstract}
 ```
 
 
 # Introduction {#sec-intro}
 
-Multi-agent reinforcement learning (MARL) has produced a growing body of work on emergent communication, in which agents learn to use a discrete signaling channel to coordinate behavior [@foerster2016learning; @sukhbaatar2016learning; @lazaridou2017multi; @havrylov2017emergence; @mordatch2018emergence]. For a comprehensive survey, see @lazaridou2020emergent. Beyond classic sender--receiver benchmarks, communication is now studied in broader cooperative settings, including sequential social dilemmas, intention-sharing architectures, and zero-shot convention formation [@leibo2017multi; @kim2021communication; @hu2020other; @bullard2021quasi]. A central question is whether agents develop meaningful, shared communication protocols or merely learn policies that happen to correlate with message-sending behavior [@kottur2017natural; @cao2018emergent]. Standard evaluation practice therefore focuses on *endpoint metrics*: mutual information (MI) between messages and task-relevant variables [@lowe2019pitfalls], topographic similarity [@lazaridou2017multi], or cooperation rates measured at the final checkpoint.
+Multi-agent reinforcement learning (MARL) has produced a growing body of work on emergent communication, in which agents learn to use a discrete signaling channel to coordinate behavior [@foerster2016learning; @sukhbaatar2016learning; @lazaridou2017multi; @havrylov2017emergence; @mordatch2018emergence]. For a comprehensive survey, see @lazaridou2020emergent. Beyond classic sender--receiver benchmarks, communication is now studied in broader cooperative settings, including sequential social dilemmas, intention-sharing architectures, and zero-shot convention formation [@leibo2017multi; @kim2021communication; @hu2020other; @bullard2021quasi]. A central question is whether agents develop meaningful, shared communication protocols or merely learn policies that happen to correlate with message-sending behavior [@kottur2017natural; @cao2018emergent]. Standard evaluation practice therefore focuses on *endpoint metrics*: mutual information (MI) between messages and task-relevant variables [@lowe2019pitfalls], topographic similarity [@lazaridou2017multi], cooperation rates measured at the final checkpoint, or positive-listening / social-influence style diagnostics [@eccles2019biases; @jaques2019social].
 
 This attribution problem is especially acute under independent learning, where non-stationarity makes it difficult to separate message semantics from the broader training dynamics [@papoudakis2019dealing; @oroojlooyjadid2022review]. We study it in a four-agent extended public goods game (EPGG) with hidden regime switching, noisy private observations, and optional binary communication [@orzan2024pgg]. The EPGG is a case study for this measurement problem rather than the contribution by itself: it gives a setting with fixed teams, sender-indexed message slots, feed-forward policies, and mixed incentives in which endpoint-only evaluation is especially likely to mislead.
+
+Closest in spirit to our framing are critique papers that show standard emergent-communication metrics can overstate semantics. Most notably, @lowe2019pitfalls demonstrated a false-positive failure mode: messages can appear informative under endpoint analyses while exerting little or no causal influence on behavior. More recently, work on Lewis games has shown that co-adaptation and overfitting can also degrade protocol quality and generalization [@rita2022generalization]. Our contribution is complementary to these critiques. We show the opposite evaluation failure mode under independent learning: weak or brittle endpoint use does not imply that messages were unimportant during training, and same-checkpoint continuation controls provide a constructive way to probe that split.
 
 The setting sits at the intersection of several adjacent literatures. Partially aligned signaling with hidden state is the core concern in classic cheap-talk and strategic information transmission models [@crawford1982strategic; @chen2008selecting]. Communication in public goods games also connects to experimental and institutional work on cooperation under uncertainty [@ledyard1995public; @fehr2000cooperation; @kosfeld2009institution; @orzan2024pgg]. More broadly, the paper fits within the Cooperative AI agenda of understanding how decentralized agents and institutions can achieve robust cooperation under imperfect alignment and limited information [@dafoe2020open].
 
 We intentionally begin with independent learning rather than centralized training. The goal is not to maximize coordination with the strongest available training machinery, but to study a regime where attribution is genuinely difficult: each agent learns under non-stationarity from local observations and the message channel itself. In this setting, improvements can easily be misread as endpoint semantics when they may instead reflect broader co-learning dynamics. Independent PPO is therefore a demanding but appropriate starting point for the evaluation question we ask here.
 
-We argue that endpoint evaluation alone can obscure continued-learning value and overstate endpoint protocol coherence. Throughout, by \emph{endpoint protocol coherence} we mean whether the frozen endpoint policy satisfies three properties: (i)~it benefits from the natural message stream relative to perturbations (\emph{robustness}), (ii)~receivers respond consistently to a given token regardless of which sender produced it (\emph{sender-consistency}), and (iii)~the net effect of natural messages on cooperation is positive (\emph{behavioral benefit}). A protocol that is locally coherent---each sender--receiver pair has a consistent convention---but globally fragmented across senders would fail properties (ii) and potentially (iii). More generally, three failure modes are worth distinguishing:
+We separate two questions that endpoint evaluation often collapses together:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{Aggregate cancellation.} When agents develop sender-indexed conventions with opposing polarities (e.g., agent~$i$ sends ``1'' for high regimes, agent~$j$ sends ``1'' for low regimes), aggregate metrics average to near zero even though each agent--receiver pair maintains a strong sender-conditioned relationship.
-  \item \textbf{Strategic value-of-information gating.} Communication may matter most when incentives are mixed and the latent state is ambiguous, but add little where cooperation is already individually optimal, so evaluation at a single difficulty level or averaged across regimes can obscure when messages actually matter.
-  \item \textbf{Structural dependence without internalization.} The trained policy may depend on the \emph{presence} of a message channel (as an architectural input) without having internalized cooperative strategies---removing the channel produces worse outcomes than never having communicated.
+  \item \textbf{Continued-learning value:} Does message \emph{content} change the downstream training trajectory when we hold the starting point fixed?
+  \item \textbf{Endpoint protocol coherence:} Does the frozen final policy use the online message stream as a robust, sender-consistent, and behaviorally beneficial code?
 \end{enumerate}
 ```
+
+Our central finding is that these two questions can have opposite answers.
 
 The EPGG is useful here because the severity of the free-rider problem changes over time without direct notification. Communication is therefore potentially valuable, but not equally so in every regime.
 
@@ -40,10 +43,10 @@ Our contributions are:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{Same-checkpoint continuation controls.} We introduce a clean experimental design for isolating the role of message content during continued learning: fork identical learned 50k checkpoints into learned, random, or silent channel modes and compare downstream cooperation. This separates continued-learning channel-content effects from frozen-endpoint protocol behavior within a fixed architecture and task.
-  \item \textbf{Continued-learning benefit vs.\ weak endpoint coherence.} Applying this design to a four-agent EPGG with 15~seeds, we find that learned messages retain a clear advantage ($+12$--$19\pp$) in the mixed-motive regime during continued training from 50k to 150k, while frozen-checkpoint interventions reveal a much weaker endpoint protocol: sender-shuffled messages \emph{outperform} natural messages across all 15~seeds.
-  \item \textbf{Strategic value-of-information in upper mixed regimes.} In this EPGG setting, communication matters where incentive alignment is ambiguous ($f\!=\!2.5, 3.5$), but the same-checkpoint controls show no clean channel-content effect where cooperation is already individually optimal ($f\!=\!5.0$).
-  \item \textbf{Endpoint causal disaggregation.} Frozen sender-specific token interventions show that endpoint messages are not inert: signed aggregate effects remain near zero while mean absolute sender--receiver effects remain sizeable, revealing sender-indexed conventions that are locally causal but globally incompatible.
+  \item \textbf{Same-checkpoint continuation controls.} We introduce a clean experimental design for isolating the role of message content during continued learning: fork identical learned checkpoints into learned, random, or silent channel modes and compare downstream outcomes. This separates continued-learning channel-content effects from frozen-endpoint protocol behavior within a fixed architecture and task.
+  \item \textbf{Continued-learning benefit vs.\ weak endpoint coherence.} Applying this design in the EPGG case study, we find a clear late-checkpoint continued-learning advantage for learned messages in the mixed-motive regime, while frozen-checkpoint interventions reveal a much weaker endpoint protocol: sender-shuffled messages can outperform natural messages.
+  \item \textbf{Strategic value-of-information in mixed regimes.} In this EPGG setting, communication matters most where incentives are mixed rather than fully aligned. In the cooperation-dominant regime, learned message content shows no advantage over silence or simple random channels, and a matched-stat sender-shuffle branch can outperform learned communication.
+  \item \textbf{Endpoint causal disaggregation.} Frozen sender-specific token interventions show that endpoint messages are not inert: signed aggregate effects remain near zero while mean absolute sender--receiver effects remain sizeable, indicating substantial local influence despite weak aggregate endpoint effects.
 \end{enumerate}
 ```
 
@@ -60,7 +63,7 @@ where the first term is agent $i$'s share of the public pool and the second is t
 
 The hidden multiplier $f_t$ takes values in $\mathcal{F} = \{0.5, 1.5, 2.5, 3.5, 5.0\}$ and switches with probability $\rho = 0.05$ per round (geometric holding time ${\sim}20$ rounds). Each agent's action is subject to trembling: with probability $\varepsilon_{\text{tremble}} = 0.05$, the action is replaced by a uniform random choice, modeling execution noise.
 
-When $f < N = 4$, defection is the dominant strategy; when $f > N$, cooperation dominates regardless of others' actions. The mixed-motive regime ($f = 3.5$) is the critical case: cooperation is collectively beneficial but individually costly ($f/N = 0.875 < 1$, so each unit contributed returns less than one unit to the contributor). This regime creates the strongest demand for communication. The full multiplier set spans five regimes, but the contrast between $f\!=\!3.5$ and $f\!=\!5.0$ is theoretically central because it separates ambiguous mixed incentives from a regime where cooperation is individually optimal. Unless otherwise noted, reported quantities such as $\pcoopgiven{f}$ condition on the \emph{true round-level multiplier} $f_t$ during evaluation rather than on an episode-level label.
+When $f < N = 4$, defection is the dominant strategy; when $f > N$, cooperation dominates regardless of others' actions. The mixed-motive regime ($f = 3.5$) is the critical case: cooperation is collectively beneficial but individually costly ($f/N = 0.875 < 1$, so each unit contributed returns less than one unit to the contributor). Concretely, a sole defector among three cooperators earns $14.5$ versus $14.0$ for a cooperator at $f\!=\!3.5$ (a temptation of $+0.5$ per round), but earns $19.0$ versus $20.0$ at $f\!=\!5.0$ (a penalty of $-1.0$). This regime creates the strongest demand for communication. The full multiplier set spans five regimes, but the contrast between $f\!=\!3.5$ and $f\!=\!5.0$ is theoretically central because it separates ambiguous mixed incentives from a regime where cooperation is individually optimal. Unless otherwise noted, reported quantities such as $\pcoopgiven{f}$ condition on the \emph{true round-level multiplier} $f_t$ during evaluation rather than on an episode-level label.
 
 ## Communication channel
 
@@ -68,9 +71,9 @@ In the communication condition (`comm_symm`), agents simultaneously broadcast a 
 
 ## Training
 
-We train agents using independent PPO [@schulman2017proximal] with generalized advantage estimation [@schulman2016high] ($\gamma = 0.99$, $\lambda = 0.95$, clip ratio $= 0.2$). Each agent has separate two-layer MLPs for the action policy, message policy (for senders), and value prediction, each with hidden width 64. At each round, a sender first emits a message from its current observation, and all agents then select actions conditioned on the received same-round message vector. For sender-updated samples, the action head and message head are optimized jointly with one clipped objective over $\log \pi(a_t, m_t)$, using the agent's own reward return and the same GAE advantage; the value head predicts only that agent's own discounted return. The policies are not recurrent. Instead, temporal information enters through a trainer-side observation wrapper that converts the raw environment observation $[\fhat, \text{endowment}]$ into Set-A inputs $[\fhat, \text{endowment}, \text{last-round cooperation fraction}, \text{own last action}, \text{EWMA cooperation}]$, where EWMA denotes an exponential moving average, plus one two-entry one-hot block per sender when communication is enabled. The base observation is therefore 5-dimensional; with four senders and binary messages, the communication slice adds eight dimensions (two per sender), giving a total observation size of 13. Agents therefore track the sticky latent regime only through current noisy signals, these simple lagged summaries, and same-round communication. Key design choices:
+We train agents using independent PPO [@schulman2017proximal] with generalized advantage estimation [@schulman2016high] ($\gamma = 0.99$, $\lambda = 0.95$, clip ratio $= 0.2$). Each agent uses separate two-hidden-layer MLPs (hidden width 64) for the action policy and value function; sender agents additionally use a separate two-hidden-layer MLP for the message policy. At each round, a sender first emits a message from the wrapped Set-A observation available before same-round message delivery, and all agents then select actions conditioned on the received same-round message vector. For sender-updated samples, the action head and message head are optimized jointly with one clipped objective over $\log \pi(a_t, m_t)$, using the agent's own reward return and the same GAE advantage; the shared value network predicts only that agent's own discounted return. The policies are not recurrent. Instead, temporal information enters through a trainer-side observation wrapper that converts the raw environment observation $[\fhat, \text{endowment}]$ into Set-A inputs $[\fhat, \text{endowment}, \text{last-round cooperation fraction}, \text{own last action}, \text{EWMA cooperation}]$, where EWMA denotes an exponential moving average, plus one two-entry one-hot block per sender when communication is enabled. The base wrapped observation is therefore 5-dimensional; with four senders and binary messages, the communication slice adds eight dimensions (two per sender), giving a 13-dimensional actor input in the communication condition. At message time this message slice reflects previously delivered messages (all zeros at episode start), and after delivery the action policy sees the rebuilt same-round message vector. The value network receives the same features plus a normalized within-episode time scalar, giving 14 dimensions by default. During training, each sender's delivered token is independently corrupted with probability 0.1 by resampling from that sender's empirical token marginal; this message-dropout corruption affects online sampled trajectories but not the frozen-checkpoint perturbation analyses. Agents therefore track the sticky latent regime only through current noisy signals, these simple lagged summaries, and communication available through the wrapped observation. Key design choices:
 
-**Why independent PPO.** This choice is deliberate rather than accidental. A centralized critic or stronger shared-training signal could partly solve the coordination problem during training, making it harder to tell whether later gains reflect decentralized online message use or richer training-time credit assignment. We therefore start from the harder decentralized regime in which endpoint-only evaluation is most likely to be misleading.
+**Why independent PPO.** As argued in the introduction, we use independent PPO to keep the attribution problem in the decentralized regime rather than partly resolving it through centralized training signals.
 
 **Entropy annealing.** Both action and message entropy coefficients decay linearly over training: action entropy from $0.01 \to 0.001$, message entropy from $0.01 \to 0.0$. This allows early exploration while permitting conventions to crystallize. The learning rate follows a cosine schedule from $3 \times 10^{-4}$ to $10^{-5}$.
 
@@ -97,18 +100,18 @@ These frozen-checkpoint perturbations estimate the effect of specific endpoint m
 
 **Channel controls.** We compare four channel modes during *continued training* from the same learned 50k checkpoint: \texttt{learned} (sender's actual message), \texttt{always\_zero} (all sender slots forced to token~0), \texttt{indep\_random} (sender slots randomized independently each round), and \texttt{public\_random} (all sender slots share the same random bit each round). This tests whether message \emph{content} matters for continued learning once initialization is held fixed.
 
-**Sender and receiver semantics.** To summarize how message use varies with the perceived regime, we discretize each agent's noisy private observation $\fhat$ into five bins, denoted $\fhat_{\text{bin}}$: $\fhat < 1.5$ (low), $1.5 \le \fhat < 2.5$, $2.5 \le \fhat < 3.5$, $3.5 \le \fhat < 4.5$, and $\fhat \ge 4.5$ (high). We then compute $P(m_i = 1 \mid \fhat_{\text{bin}})$ (sender semantics: how often sender $i$ sends token~1 in each bin) and $P(a_j = C \mid m_i, \fhat_{\text{bin}})$ (receiver semantics: how receiver $j$'s cooperation varies with sender $i$'s token), both disaggregated by sender identity. When we later refer to low and high bins for polarity, we mean $\fhat < 1.5$ and $\fhat \ge 4.5$, respectively. This binned notation $\fhat_{\text{bin}}$ reappears in Appendix~C.
+**Sender and receiver semantics.** Appendix~C summarizes sender message rates and receiver cooperation by discretizing each agent's noisy private signal into five bins and conditioning on sender identity. The full bin definitions and notation appear there.
 
 **Sender-specific causal endpoint probe.** At the frozen 150k endpoint, we take greedy-evaluation states from the natural rollout, hold the raw observations and all other message slots fixed, force sender $i$'s token to 0 or 1, and measure the induced change in receiver $j$'s cooperation probability and greedy action. Unlike the receiver-semantics summaries, this is an interventional test of whether sender-conditioned endpoint effects are causally used by the frozen policy.
 
 These diagnostics answer different questions. Same-checkpoint continuation isolates whether channel content affects \emph{continued learning} when initialization is fixed. Frozen message interventions ask whether the \emph{endpoint policy} benefits from the natural online message stream. Sender-specific frozen interventions ask whether individual sender tokens retain local causal influence at the endpoint. Receiver-semantics analyses are descriptive rather than causal and are included to show how aggregate endpoint summaries can hide sender-conditioned structure.
 
-**Roadmap.** The remaining sections are organized as follows. The [baseline comparison](#sec-main-result) establishes a descriptive baseline by comparing separately trained communication and no-communication policies. The [continued-learning analysis](#sec-semantic-window) presents the paper's core identification design: [same-checkpoint continuation](#sec-sameckpt) and [frozen-checkpoint endpoint interventions](#sec-frozen-endpoint), with exploratory controls deferred to Appendices~D--E. The [Discussion](#sec-discussion) then places the results in context and discusses limitations, while Appendix~C provides the observational aggregate-metric and polarity analysis that complements the frozen probes.
+**Roadmap.** The remaining sections are organized as follows. The [baseline comparison](#sec-main-result) establishes a descriptive baseline by comparing separately trained communication and no-communication policies. The [continued-learning analysis](#sec-semantic-window) presents the paper's core identification design: [same-checkpoint continuation](#sec-sameckpt) and [frozen-checkpoint endpoint interventions](#sec-frozen-endpoint). The [Discussion](#sec-discussion) then places the results in context and discusses limitations, while Appendices~C--D provide complementary endpoint and mechanism diagnostics.
 
 # Baseline communication gap in separately trained policies {#sec-main-result}
 
 ```{=latex}
-\begin{table}[t]
+\begin{table}[H]
   \caption{Round-conditional cooperation rates $P(C \mid f_t=f)$ for communication vs.\ no-communication conditions across training. Mean $\pm$ SEM over 15 seeds. The final row reports the paired mean gap (\texttt{comm\_symm} minus \texttt{no\_comm\_symm}).}
   \tablabel{comm_gap}
   \centering
@@ -133,27 +136,25 @@ These diagnostics answer different questions. Same-checkpoint continuation isola
 \end{table}
 ```
 
-Table \ref{tab:comm_gap} is a descriptive baseline rather than the paper's main identification design: communication and no-communication policies are trained separately, so the gap mixes channel-content effects with broader training-trajectory differences. We use it to motivate the tighter same-checkpoint controls below, and @fig-value-surface later shows that the descriptive gap peaks in the upper mixed regimes rather than increasing monotonically with generic ``difficulty.''
+We begin with a separately trained baseline comparison. Because the communication and no-communication policies are trained independently, the gap in Table \ref{tab:comm_gap} mixes message effects with broader training-trajectory differences; we use it to motivate the tighter same-checkpoint analysis below. @fig-value-surface later shows that this descriptive gap peaks in the upper mixed regimes rather than increasing monotonically with generic ``difficulty.''
 
 At $f = 3.5$ (mixed regime), communication produces a robust $+\pvGapTFFkPP\pp$ cooperation advantage at 50k episodes, with all 15 seeds showing positive effects (range: $+\pvGapRangeLo$ to $+\pvGapRangeHi\pp$). This benefit persists more modestly at 150k ($+\pvGapTFOfkPP\pp$, $\pvNposOfk$/15 seeds positive).
 
-At $f = 5.0$ (cooperation-dominant regime), the communication benefit is small at 50k ($+\pvGapFVFkPP\pp$) and **reverses** by 150k ($\pvGapFVOfkPP\pp$, $p < 0.001$). In this EPGG setting, communication-trained agents cooperate less than those that never had a channel when cooperation is individually rational. This reversal should be interpreted cautiously: Table \ref{tab:comm_gap} compares separately trained communication and no-communication pipelines, so the gap could reflect different training trajectories or architectural dependence on the channel rather than harmful message content per se. Two mechanisms could explain why having a channel during training \emph{hurts} at $f\!=\!5.0$: (i)~the communication architecture adds input dimensions and policy complexity that slow convergence toward the individually rational cooperation strategy, and (ii)~mixed-motive regimes ($f\!=\!3.5$) create gradient pressure toward conditional cooperation, and this conditioning may not fully disengage when the regime switches to $f\!=\!5.0$. The same-checkpoint controls show no channel-mode separation at $f\!=\!5.0$ (Table \ref{tab:sameckpt}), confirming that the reversal reflects these training-trajectory differences rather than ongoing harmful message-content effects.
+At $f = 5.0$ (cooperation-dominant regime), the communication advantage is small at 50k ($+\pvGapFVFkPP\pp$) and reverses by 150k ($\pvGapFVOfkPP\pp$, $p < 0.001$). Appendix~D weighs more strongly against a pure architecture-slowing account and toward late mixed-regime conditioning: communication is not behind early at $f\!=\!5.0$, history interventions matter more than message corruption at 150k, and same-checkpoint controls show no learned-content advantage there.
 
-Welfare moves in the same direction, so the descriptive gap is not driven by cooperation alone. Communication helps most where latent-state information matters under mixed incentives, and the $f\!=\!3.5$ benefit declines from 50k to 150k without disappearing entirely. Appendix~F shows dense online curves with checkpoint anchors; we treat those trajectories as descriptive context only because they cross a continuation seam and mix sampled training behavior with greedy checkpoint evaluation.
+Communication helps most where latent-state information matters under mixed incentives, and the $f\!=\!3.5$ benefit declines from 50k to 150k without disappearing entirely.
 
 
 # When does message content matter? {#sec-semantic-window}
 
 The communication benefit raises a question: does message *content* drive the cooperation advantage, or does merely having a channel (even a noisy one) suffice? We address this with a sequence of controls centered on same-checkpoint continuation.
 
-## Exploratory from-scratch channel controls {#sec-separate-controls}
-
 ## Same-checkpoint continuation isolates continued-training channel-content effects {#sec-sameckpt}
 
-Appendix~D reports a small-\(N\) from-scratch channel-control check, but because it confounds channel mode with the entire training trajectory, we do not rely on it for identification. Instead, we take the **identical** learned 50k checkpoints and continue training to 150k under four basic channel controls plus one matched-stat continuation control ($N = 15$ seeds).
+The separately trained comparison in Table \ref{tab:comm_gap} confounds message effects with everything else that differs between training runs. To remove that confound, we hold the starting point fixed: all branches begin from the **same** learned 50k checkpoints. We then fork those checkpoints into four basic channel controls plus one matched-stat continuation control ($N = 15$ seeds).
 
 ```{=latex}
-\begin{table}[t]
+\begin{table}[H]
   \caption{Same-checkpoint continuation controls: cooperation when all modes start from identical learned 50k policies. At 50k, all values are identical (same checkpoint). By 150k, the mixed-motive branch ($f\!=\!3.5$) retains a clear learned-channel advantage, whereas the cooperation-dominant regime ($f\!=\!5.0$) shows little separation. The matched-stat \texttt{sender\_shuffle} row preserves per-sender token frequencies while breaking state-contingency. Mean $\pm$ SEM over \TIIInSeeds{} seeds; $\Delta$ column shows the paired learned$-$control gap at 150k with 95\% bootstrap CI.}
   \tablabel{sameckpt}
   \centering
@@ -175,11 +176,7 @@ Appendix~D reports a small-\(N\) from-scratch channel-control check, but because
 \end{table}
 ```
 
-Because all branches start from the same 50k checkpoint, later divergence isolates the effect of channel mode during continued training from 50k to 150k. Operationally, this is a common warm-start continuation protocol: each branch reloads the same 50k network weights and resumes the learning-rate and entropy schedules from the same episode count, but does not restore optimizer state. We therefore interpret Table \ref{tab:sameckpt} as evidence about continued-training channel-content effects under a shared continuation procedure rather than as a complete measure of communication's value over the full training run. By 150k at $f\!=\!3.5$, learned messages retain paired advantages of $\TIIIZeroGapOfk\pp$ versus silence (95\% CI $\TIIIZeroGapOfkCI$, sign-flip $p\TIIIZeroGapOfkP$), $\TIIIPubGapOfk\pp$ versus public random (CI $\TIIIPubGapOfkCI$, $p\TIIIPubGapOfkP$), and $\TIIIIndepGapOfk\pp$ versus independent random (CI $\TIIIIndepGapOfkCI$, $p\TIIIIndepGapOfkP$). All three paired confidence intervals exclude zero. The basic zero/random control modes all cluster tightly (standard deviations ${\sim}0.04$--$0.08$), while the learned condition shows substantially higher variance (SD ${\sim}0.15$), suggesting that semantic content amplifies seed-level heterogeneity. At $f\!=\!5.0$, those basic four modes remain close together, while the matched-stat \texttt{sender\_shuffle} branch later shows that reshuffling can even outperform learned communication. The cleanest reading is therefore not generic ``difficulty gating,'' but strategic value-of-information gating: message content matters where agents face mixed incentives and a noisy latent regime, and matters little where cooperation is already individually rational.
-
-Welfare tracks the same pattern, so the mixed-regime result is not just a cooperation-only artifact.
-
-**Caveat: channel-distribution shift.** These controls are not perfectly semantic-clean. Replacing learned messages with zero or random inputs changes the input distribution seen by a channel-conditioned policy, so some of the learned-minus-control gap could reflect adaptation cost under altered channel statistics rather than semantic value alone. The magnitude of this confound is bounded by the fact that all three control modes (which differ substantially in their input statistics---silence, independent noise, and correlated noise) cluster tightly at 150k, while only the learned branch diverges upward. We therefore added a matched-stat continuation control that preserves each sender's marginal token frequency while breaking state-contingency (\texttt{sender\_shuffle}). At 150k and $f\!=\!3.5$, learned still exceeds sender-shuffle on average (53.6\% vs.\ 44.6\% cooperation; $+9.0\pp$ mean paired gap), but this matched-stat gap is heterogeneous and its bootstrap CI overlaps zero. At $f\!=\!5.0$, sender-shuffle instead outperforms learned by $15.9\pp$ on average, with a negative bootstrap CI that excludes zero. The cleanest interpretation is therefore intermediate: the learned-vs-zero/random advantage likely combines genuine state-linked message value with broader structural dependence on having a channel, and the mixed-regime semantic component appears real but more modest under matched-stat controls.
+Table \ref{tab:sameckpt} therefore speaks to continued-training effects rather than a full-run decomposition. By 150k at $f\!=\!3.5$, learned messages retain paired advantages of $\TIIIZeroGapOfk\pp$ versus silence (95\% CI $\TIIIZeroGapOfkCI$, sign-flip $p\TIIIZeroGapOfkP$), $\TIIIPubGapOfk\pp$ versus public random (CI $\TIIIPubGapOfkCI$, $p\TIIIPubGapOfkP$), and $\TIIIIndepGapOfk\pp$ versus independent random (CI $\TIIIIndepGapOfkCI$, $p\TIIIIndepGapOfkP$). All three paired confidence intervals exclude zero, but all branches decline from the shared 50k starting point: the learned branch does not \emph{sustain} cooperation, it \emph{slows} the decline relative to the controls. A natural concern is channel-distribution shift: the learned-minus-control gap may partly reflect adaptation cost from receiving unfamiliar inputs rather than semantic value. The matched-stat \texttt{sender\_shuffle} continuation addresses this by replacing each sender's token with a draw from that sender's empirical marginal, preserving on-distribution marginals while destroying state-contingency. If learned still outperforms sender-shuffle, the advantage is harder to attribute to distribution matching alone. At 150k and $f\!=\!3.5$, learned still exceeds sender-shuffle on average (53.6\% vs.\ 44.6\% cooperation; $+9.0\pp$ mean paired gap), but this gap is heterogeneous and its bootstrap CI overlaps zero; at $f\!=\!5.0$, sender-shuffle instead outperforms learned by $15.9\pp$. The cleanest interpretation is therefore intermediate: the learned-vs-zero/random advantage combines genuine state-linked message value with broader channel dependence, and the semantic component is real but more modest under matched-stat controls.
 
 @fig-value-surface makes the multiplier-wide version of this point visible before we turn to the endpoint intervention suite.
 
@@ -233,17 +230,6 @@ axes[0].set_ylim(-30, 30)
 plt.tight_layout()
 plt.show()
 ```
-
-This reveals a **strategic value-of-information** pattern:
-
-```{=latex}
-\begin{itemize}[leftmargin=*,nosep]
-  \item \textbf{Mixed-motive regime ($f\!=\!3.5$)}: Learned message content provides a clear advantage over noise and silence when private signals are noisy and unilateral cooperation is still costly.
-  \item \textbf{Cooperation-dominant regime ($f\!=\!5.0$)}: Message content is largely irrelevant. Agents learn to cooperate regardless of channel mode.
-\end{itemize}
-```
-
-Seed heterogeneity remains substantial even at 15 seeds, underscoring the importance of multi-seed evaluation in MARL experiments. As shown in @fig-semantic-window, the mixed-motive paired deltas are mostly positive against all three controls, while the cooperation-dominant raw outcomes overlap heavily across channel modes.
 
 ```{python}
 #| label: fig-semantic-window
@@ -377,40 +363,36 @@ plt.tight_layout()
 plt.show()
 ```
 
-## Frozen-checkpoint endpoint interventions are weak at 150k {#sec-frozen-endpoint}
+## Frozen-checkpoint endpoint use is mixed and non-robust at 150k {#sec-frozen-endpoint}
 
-Same-checkpoint continuation shows that meaningful message content affects the 50k-to-150k learning trajectory. To ask the narrower endpoint question---how much the frozen learned policy still depends on online messages---we evaluate the learned checkpoints under direct message perturbations without further training.
+The preceding experiment shows that message content matters for \emph{learning}. We now ask a different question: does the \emph{already-trained} policy still benefit from natural messages during evaluation, with no further learning? The answer is much weaker.
 
 ```{=latex}
-\begin{table}[t]
-  \caption[Frozen-checkpoint intervention effects at $f\!=\!3.5$.]{Frozen-checkpoint intervention effects in the mixed-motive regime ($f\!=\!3.5$). $\Delta P(C)$ in percentage points, computed as natural $-$ intervened: positive values mean natural messages helped, negative values mean the intervention \emph{outperformed} natural messages. Mean $\pm$ SEM over 15 seeds; 95\% bootstrap CI and sign consistency (fraction of seeds where natural $>$ intervention) shown for 150k.}
+\begin{table}[H]
+  \caption[Frozen-checkpoint intervention effects at $f\!=\!3.5$ and 150k.]{Frozen-checkpoint intervention effects in the mixed-motive regime ($f\!=\!3.5$) at the 150k checkpoint. $\Delta P(C)$ in percentage points, computed as natural $-$ intervened: positive values mean natural messages helped, negative values mean the intervention \emph{outperformed} natural messages. Mean $\pm$ SEM over 15 seeds; 95\% bootstrap CI and sign consistency (fraction of seeds where natural $>$ intervention) are reported for 150k only. The corresponding 50k endpoint summaries appear in Appendix~C.}
   \tablabel{frozen_endpoint}
   \centering
   \small
-  \begin{tabular}{lcccl}
+  \begin{tabular}{lccl}
     \toprule
-    Intervention & 50k & 150k & 95\% CI & Sign \\
+    Intervention & 150k & 95\% CI & Sign \\
     \midrule
-    \texttt{zeros}          & $\TFRZerosFk \pm \TFRZerosFkSEM$ & $\TFRZerosOfk \pm \TFRZerosOfkSEM$ & $\TFRZerosOfkCI$ & $\TFRZerosOfkSign$ \\
-    \texttt{fixed0}         & $\TFRFixZeroFk \pm \TFRFixZeroFkSEM$ & $\TFRFixZeroOfk \pm \TFRFixZeroOfkSEM$ & $\TFRFixZeroOfkCI$ & $\TFRFixZeroOfkSign$ \\
-    \texttt{public\_random} & $\TFRPubFk \pm \TFRPubFkSEM$ & $\TFRPubOfk \pm \TFRPubOfkSEM$ & $\TFRPubOfkCI$ & $\TFRPubOfkSign$ \\
-    \texttt{indep\_random}  & $\TFRIndepFk \pm \TFRIndepFkSEM$ & $\TFRIndepOfk \pm \TFRIndepOfkSEM$ & $\TFRIndepOfkCI$ & $\TFRIndepOfkSign$ \\
-    \texttt{sender\_shuffle} & $\TFRShuffleFk \pm \TFRShuffleFkSEM$ & $\TFRShuffleOfk \pm \TFRShuffleOfkSEM$ & $\TFRShuffleOfkCI$ & $\TFRShuffleOfkSign$ \\
-    \texttt{permute\_slots} & $\TFRPermuteFk \pm \TFRPermuteFkSEM$ & $\TFRPermuteOfk \pm \TFRPermuteOfkSEM$ & $\TFRPermuteOfkCI$ & $\TFRPermuteOfkSign$ \\
+    \texttt{zeros}          & $\TFRZerosOfk \pm \TFRZerosOfkSEM$ & $\TFRZerosOfkCI$ & $\TFRZerosOfkSign$ \\
+    \texttt{fixed0}         & $\TFRFixZeroOfk \pm \TFRFixZeroOfkSEM$ & $\TFRFixZeroOfkCI$ & $\TFRFixZeroOfkSign$ \\
+    \texttt{public\_random} & $\TFRPubOfk \pm \TFRPubOfkSEM$ & $\TFRPubOfkCI$ & $\TFRPubOfkSign$ \\
+    \texttt{indep\_random}  & $\TFRIndepOfk \pm \TFRIndepOfkSEM$ & $\TFRIndepOfkCI$ & $\TFRIndepOfkSign$ \\
+    \texttt{sender\_shuffle} & $\TFRShuffleOfk \pm \TFRShuffleOfkSEM$ & $\TFRShuffleOfkCI$ & $\TFRShuffleOfkSign$ \\
+    \texttt{permute\_slots} & $\TFRPermuteOfk \pm \TFRPermuteOfkSEM$ & $\TFRPermuteOfkCI$ & $\TFRPermuteOfkSign$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 ```
 
-Table \ref{tab:frozen_endpoint} reveals a mixed endpoint picture. At 50k, most interventions have near-zero effects: natural messages are not cleanly better than replacements. By 150k, natural messages are on average above several replacements, including silence (\texttt{zeros}, $\TFRZerosOfk\pp$) and independent random noise (\texttt{indep\_random}, $\TFRIndepOfk\pp$), but these effects remain modest and heterogeneous across seeds.
-
-Critically, however, \texttt{sender\_shuffle} ($\TFRShuffleOfk\pp$) \emph{outperforms} natural messages at 150k---and does so consistently across all 15 seeds ($\TFRShuffleOfkSign$ seeds with natural $>$ shuffled; 95\% CI: $\TFRShuffleOfkCI\pp$, sign-flip $p\TFRShuffleOfkP$). Sender-shuffled messages preserve each sender's marginal token distribution but break the link between message and current state. That shuffled messages beat natural ones shows that the frozen endpoint policy does not reliably benefit from the original state-conditioned message stream. This does not imply that endpoint messages are meaningless. Rather, it suggests that whatever endpoint structure exists is brittle: it may be sender-indexed, poorly calibrated, or otherwise misaligned with a robust shared code. Sender-indexed conventions are one live explanation, but not the only one: self-conditioning, temporal miscalibration, and more general channel-conditioned overfitting remain consistent with this intervention pattern. To test whether endpoint messages are still used causally at a more local level, we next intervene on individual sender tokens while holding the rest of the message vector fixed.
-
-At the frozen 150k checkpoint, we therefore run a sender-specific causal probe: for each stored greedy-evaluation state and true multiplier, we hold raw observations and all other message slots fixed, force sender $i$'s token to 0 or 1, and measure the induced change in receiver $j$'s cooperation probability and greedy action.
+Table \ref{tab:frozen_endpoint} shows that 150k endpoint intervention effects are modest relative to the same-checkpoint continuation gaps. The corresponding 50k endpoint summaries are reported in Appendix~C and are also small in aggregate. The main exception is \texttt{sender\_shuffle}, which \emph{outperforms} natural messages at 150k ($\TFRShuffleOfk\pp$; 95\% CI $\TFRShuffleOfkCI\pp$; sign-flip $p\TFRShuffleOfkP$). Because sender-shuffling preserves each sender's marginal token frequency while breaking state-contingency, this result implies that the frozen endpoint policy does not robustly benefit from the original state-conditioned message stream. But are individual messages still doing \emph{anything}? To test this, we next intervene on one sender token at a time while holding the rest of the message vector fixed, in the spirit of intervention-based influence analyses [@jaques2019social].
 
 ```{=latex}
-\begin{table}[t]
-  \caption{Frozen sender-specific causal probe at 150k. Non-self sender--receiver pairs only. For each true multiplier $f$, we hold the raw observation and remaining message slots fixed, force sender $i$'s token to 0 or 1, and average over seeds the resulting signed change in receiver cooperation probability, the absolute change, and the greedy-action flip rate relative to the natural message.}
+\begin{table}[H]
+  \caption{Frozen sender-specific causal probe at 150k, non-self sender--receiver pairs only. For each true multiplier $f$, we hold the raw observation and other message slots fixed, force sender $i$'s token to 0 or 1, and compute the resulting signed and absolute change in receiver cooperation probability. Flip-rate columns report the fraction of states in which forcing token 0 or 1 changes receiver $j$'s greedy action relative to the natural message. Effect summaries include 95\% bootstrap CIs over training seeds.}
   \tablabel{sender_causal}
   \centering
   \small
@@ -418,50 +400,40 @@ At the frozen 150k checkpoint, we therefore run a sender-specific causal probe: 
     \toprule
     $f$ & Signed $\Delta P(C)$ (pp) & Mean $|\Delta P(C)|$ (pp) & Flip rate force0 (\%) & Flip rate force1 (\%) \\
     \midrule
-    $0.5$ & $\TSCDeltaZeroFive$ & $\TSCAbsZeroFive$ & $\TSCFlipZeroZeroFive$ & $\TSCFlipOneZeroFive$ \\
-    $1.5$ & $\TSCDeltaOneFive$ & $\TSCAbsOneFive$ & $\TSCFlipZeroOneFive$ & $\TSCFlipOneOneFive$ \\
-    $2.5$ & $\TSCDeltaTwoFive$ & $\TSCAbsTwoFive$ & $\TSCFlipZeroTwoFive$ & $\TSCFlipOneTwoFive$ \\
-    $3.5$ & $\TSCDeltaThreeFive$ & $\TSCAbsThreeFive$ & $\TSCFlipZeroThreeFive$ & $\TSCFlipOneThreeFive$ \\
-    $5.0$ & $\TSCDeltaFiveZero$ & $\TSCAbsFiveZero$ & $\TSCFlipZeroFiveZero$ & $\TSCFlipOneFiveZero$ \\
+    $0.5$ & $\TSCDeltaZeroFive\;\TSCDeltaZeroFiveCI$ & $\TSCAbsZeroFive\;\TSCAbsZeroFiveCI$ & $\TSCFlipZeroZeroFive$ & $\TSCFlipOneZeroFive$ \\
+    $1.5$ & $\TSCDeltaOneFive\;\TSCDeltaOneFiveCI$ & $\TSCAbsOneFive\;\TSCAbsOneFiveCI$ & $\TSCFlipZeroOneFive$ & $\TSCFlipOneOneFive$ \\
+    $2.5$ & $\TSCDeltaTwoFive\;\TSCDeltaTwoFiveCI$ & $\TSCAbsTwoFive\;\TSCAbsTwoFiveCI$ & $\TSCFlipZeroTwoFive$ & $\TSCFlipOneTwoFive$ \\
+    $3.5$ & $\TSCDeltaThreeFive\;\TSCDeltaThreeFiveCI$ & $\TSCAbsThreeFive\;\TSCAbsThreeFiveCI$ & $\TSCFlipZeroThreeFive$ & $\TSCFlipOneThreeFive$ \\
+    $5.0$ & $\TSCDeltaFiveZero\;\TSCDeltaFiveZeroCI$ & $\TSCAbsFiveZero\;\TSCAbsFiveZeroCI$ & $\TSCFlipZeroFiveZero$ & $\TSCFlipOneFiveZero$ \\
     \bottomrule
   \end{tabular}
 \end{table}
 ```
 
-Table \ref{tab:sender_causal} sharpens the endpoint interpretation. The signed mean effect is near zero at every multiplier, including $\TSCDeltaThreeFive\pp$ at $f\!=\!3.5$ and $\TSCDeltaFiveZero\pp$ at $f\!=\!5.0$, but the mean absolute non-self sender--receiver effect remains sizable: $\TSCAbsTwoFive\pp$ at $f\!=\!2.5$, $\TSCAbsThreeFive\pp$ at $f\!=\!3.5$, and $\TSCAbsFiveZero\pp$ at $f\!=\!5.0$. Forcing a single sender's token flips the receiver's greedy action $\TSCFlipZeroThreeFive$--$\TSCFlipOneThreeFive$\% of the time at $f\!=\!3.5$ and $\TSCFlipZeroFiveZero$--$\TSCFlipOneFiveZero$\% at $f\!=\!5.0$. Endpoint messages are therefore not inert; they exert heterogeneous local causal effects that largely cancel in aggregate.
+Table \ref{tab:sender_causal} answers the local endpoint question directly: individual messages still exert local causal effects. For non-self sender--receiver pairs, forcing a single sender's token flips the receiver's greedy action $\TSCFlipZeroThreeFive$--$\TSCFlipOneThreeFive$\% of the time at $f\!=\!3.5$, with mean absolute cooperation effects of $\TSCAbsThreeFive\pp$; at $f\!=\!5.0$, the corresponding values are $\TSCFlipZeroFiveZero$--$\TSCFlipOneFiveZero$\% and $\TSCAbsFiveZero\pp$. Yet the signed mean effect is near zero at every multiplier, including $\TSCDeltaThreeFive\pp$ at $f\!=\!3.5$ and $\TSCDeltaFiveZero\pp$ at $f\!=\!5.0$. The endpoint channel therefore has real local causal effects that largely cancel in aggregate. This pattern is consistent with different senders developing opposite conventions: one sender's token~1 encourages cooperation while another's discourages it, so the per-sender effects wash out when averaged together.
 
-This endpoint use is not reducible to pure self-conditioning. In the same 150k sender-specific probe, self pairs are somewhat stronger than non-self pairs, but non-self effects remain substantial: at $f\!=\!3.5$, mean absolute $|\Delta P(C)|$ is $5.7\pp$ for self pairs and $5.0\pp$ for non-self pairs, with non-self greedy-action flip rates still 12.2--12.9\%. At $f\!=\!5.0$, the corresponding values are $4.0\pp$ versus $3.8\pp$, with non-self flip rates 9.8--11.5\%. The message channel therefore appears to serve both self-conditioning and genuine cross-agent influence at the endpoint.
-
-These endpoint-causal effects are still much smaller than the same-checkpoint continuation gaps ($+12$--$19\pp$). The synthesis is therefore two-layered: meaningful communication shaped the learning trajectory substantially, but the frozen policy uses messages weakly and inconsistently online.
-
-An exploratory mute-after-50k control remains consistent with structural channel dependence but is only 3 seeds, so we leave it in Appendix~E rather than treat it as a core result.
+Non-self effects are nearly as large as self effects (Appendix~C), so the endpoint channel is not merely a self-conditioning device.
 
 ## Synthesis: separating continued-learning from endpoint effects
 
-The dissociation between continued-learning value and endpoint protocol coherence is not confined to the single $f\!=\!3.5$ versus $f\!=\!5.0$ comparison. As @fig-value-surface already previewed, the same-checkpoint continuation gap peaks in the upper mixed regimes, while the frozen natural-versus-shuffle contrast is also largest there.
-
-Overall, the results show a dissociation. Same-checkpoint continuation controls reveal continued-learning value, while frozen-endpoint interventions ask a narrower question about online message use in a fixed policy. In this EPGG case study:
+Same-checkpoint continuation and frozen-endpoint interventions answer different questions. In this EPGG case study:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{Continued-learning value survives in the mixed-motive regime, but weakens under matched-stat controls.} At $f\!=\!3.5$, learned messages outperform all control modes when forked from identical checkpoints (150k, Table \ref{tab:sameckpt}). By 150k, the learned branch remains $+19\pp$ above silence and $+12$--$14\pp$ above the random-channel controls. A matched-stat sender-shuffle branch still trails learned by $+9.0\pp$ on average at 150k, but this gap is appreciably smaller and more heterogeneous across seeds, indicating that the strongest learned-vs-control separation partly reflects broader channel dependence as well as state-linked message value.
-  \item \textbf{Endpoint online use is much weaker and can be adverse.} The frozen-endpoint interventions are small relative to the same-checkpoint gaps, and \texttt{sender\_shuffle} improves performance. Yet the sender-specific causal probe still finds $\TSCAbsThreeFive\pp$ mean absolute non-self effects at $f\!=\!3.5$ despite a signed average near zero. Endpoint communication is therefore locally causal but not organized into a robust shared protocol. This maps directly to the \emph{aggregate cancellation} failure mode identified in the introduction: sender-indexed conventions with opposing polarities produce near-zero aggregate effects despite strong per-sender responses.
-  \item \textbf{The $f\!=\!5.0$ reversal is consistent with training-trajectory differences rather than ongoing message-content effects.} In this EPGG setting, communication-trained agents cooperate $\pvGapFVOfkPP\pp$ less than no-communication agents at $f\!=\!5.0$ at 150k. Since same-checkpoint controls show no channel-mode separation at $f\!=\!5.0$, the reversal is more naturally attributed to training-trajectory differences and architectural dependence than to harmful endpoint semantics per se. This illustrates the \emph{strategic value-of-information gating} failure mode: evaluating only at $f\!=\!5.0$ (or averaging across regimes) would obscure the genuine content effect at $f\!=\!3.5$.
+  \item \textbf{Continued-learning value survives in the mixed-motive regime, but weakens under matched-stat controls.} At $f\!=\!3.5$, learned messages outperform all control modes at 150k (Table \ref{tab:sameckpt}). A matched-stat sender-shuffle branch narrows that gap substantially and leaves its CI overlapping zero, indicating that the strongest learned-vs-control separation reflects a mixture of state-linked message value and broader channel dependence rather than a purely semantic channel.
+  \item \textbf{Endpoint online use is much weaker and can be adverse.} The frozen-endpoint interventions are small relative to the same-checkpoint gaps, and \texttt{sender\_shuffle} improves performance. Yet the sender-specific causal probe still finds $\TSCAbsThreeFive\pp$ mean absolute non-self effects at $f\!=\!3.5$ despite a signed average near zero. Endpoint communication is therefore locally causal but not organized into a robust shared protocol. This is \emph{aggregate cancellation}: sender-indexed conventions with opposing polarities produce near-zero aggregate effects despite strong per-sender responses.
+  \item \textbf{The $f\!=\!5.0$ reversal reflects late history-conditioned miscalibration.} The communication branch drifts downward from 50k to 150k in both regimes, but only $f\!=\!5.0$ turns this drift into a reversal: at $f\!=\!3.5$, learned messages still beat the control modes, whereas at $f\!=\!5.0$ same-checkpoint controls show no learned-content advantage and matched-stat sender-shuffling outperforms learned communication. Appendix~D further shows that the late $f\!=\!5.0$ shortfall is more sensitive to temporal-history interventions than to message corruption, consistent with a failure to disengage mixed-regime conditionality. This is a \emph{strategic value-of-information} failure: evaluating only at $f\!=\!5.0$ would miss the genuine content effect at $f\!=\!3.5$.
 \end{enumerate}
 ```
 
-The exploratory mute-after-50k control is additionally consistent with structural dependence, but the same-checkpoint and frozen-endpoint results already establish the central dissociation without relying on this small-\(N\) add-on. Aggregate endpoint summaries can still miss sender-conditioned structure because opposing per-sender effects cancel in the mean. Appendix~C reports that observational disaggregation and polarity analysis; the main identification rests on the paired continuation controls and frozen causal probes above.
+Aggregate endpoint summaries can still miss sender-conditioned structure because opposing per-sender effects cancel in the mean. Appendix~C reports that observational disaggregation and polarity analysis; the main identification rests on the paired continuation controls and frozen causal probes above.
 
 
 # Discussion {#sec-discussion}
 
-**Summary.** Same-checkpoint continuation controls reveal continued-learning value, while frozen-checkpoint interventions ask whether the endpoint policy uses messages as a robust online code. In this EPGG case study, learned messages retain a clear mixed-regime advantage over silence and random channels during continued training, but a matched-stat sender-shuffle control shrinks that advantage to about $+9\pp$, indicating a mixture of state-linked message value and broader channel dependence. At the frozen endpoint, sender-shuffled messages outperform natural ones while sender-specific probes still show sizable local effects, so the endpoint code is not inert but brittle and sender-indexed.
+The preceding results establish a dissociation between continued-learning value and endpoint protocol coherence. In this EPGG case study, messages still change learning in the mixed regime even when the final endpoint code is brittle and sender-indexed, underscoring that endpoint summaries alone can misstate communication benefit under independent learning [@papoudakis2019dealing; @oroojlooyjadid2022review].
 
-**Methodological point.** The main contribution is therefore evaluative rather than game-specific: endpoint summaries alone can miss a split between continued-learning value and endpoint protocol coherence, especially under independent learners where non-stationarity already complicates attribution [@papoudakis2019dealing; @oroojlooyjadid2022review].
-
-**Limitations.** The results are conditional on one game, a binary vocabulary, four fixed-team agents with sender-labeled slots, and independent PPO. The same-checkpoint design holds initialization fixed but does not fully remove channel-distribution shift, and our matched-stat sender-shuffle control still preserves only per-sender marginals rather than richer temporal structure or a clean self-versus-other decomposition. The continuation branches are also warm starts rather than bitwise uninterrupted runs, so stitched online curves are descriptive only; the main policy-quality evidence comes from greedy checkpoint evaluation.
-
-**Future work.** The most immediate next steps are stricter matched-history controls, explicit self-versus-other message masking, and multi-checkpoint branching to map when communication matters during training rather than only from 50k to 150k.
+The results remain conditional on one game, a binary vocabulary, four fixed-team agents with sender-labeled slots, and independent PPO. The same-checkpoint design holds initialization fixed but does not fully remove channel-distribution shift, and our matched-stat sender-shuffle control still preserves only per-sender marginals rather than richer temporal structure or a clean self-versus-other decomposition. The continuation branches are warm starts rather than bitwise uninterrupted runs, and all frozen evaluations use a fixed evaluation seed (9001), so uncertainty is over training seeds rather than evaluator-seed sweeps. The most immediate next step is a stricter matched-history continuation design that also separates self-versus-other dependence and uses earlier or multiple branch points.
 
 
 ## References {.unnumbered}
@@ -497,10 +469,12 @@ The exploratory mute-after-50k control is additionally consistent with structura
     Endowment $c$ & 4 \\
     \midrule
     \multicolumn{2}{l}{\textit{Architecture}} \\
-    Policy/value networks & Separate 2-layer MLPs (action, message, value) \\
-    Hidden size & 64 \\
+    Policy/value networks & Each agent: separate 2-layer MLPs for action and value; sender agents additionally have a separate 2-layer message MLP \\
+    Hidden size / activation & 64 / ReLU \\
     Recurrent state & None \\
     Observation wrapper & $[\fhat,\ \text{endowment},\ \text{last coop. frac.},\ \text{own last action},\ \text{EWMA coop.},\ \text{received one-hot messages}]$ \\
+    Actor input dim. (\texttt{comm\_symm}) & 13 (5 wrapped base features + 8 message features) \\
+    Value input dim. (\texttt{comm\_symm}) & 14 (actor input + normalized within-episode time) \\
     Vocabulary size $|M|$ & 2 (binary) \\
     Parameters per network & ${\sim}5$K scale \\
     \midrule
@@ -514,11 +488,13 @@ The exploratory mute-after-50k control is additionally consistent with structura
     Learning rate & $3 \times 10^{-4} \to 10^{-5}$ (cosine) \\
     Action entropy coeff. & $0.01 \to 0.001$ (linear) \\
     Message entropy coeff. & $0.01 \to 0.0$ (linear) \\
+    Optimizer & Adam, one optimizer per agent over all trainable parameters \\
     \midrule
     \multicolumn{2}{l}{\textit{Training}} \\
     Total episodes & 150,000 \\
     Seeds & 15 independent seeds \\
     Checkpoint interval & 50,000 episodes \\
+    Message dropout & 0.1 per sender per round; dropped token resampled from sender empirical marginal \\
     \midrule
     \multicolumn{2}{l}{\textit{Evaluation}} \\
     Action selection & Greedy (argmax) \\
@@ -563,6 +539,35 @@ The frozen sender-specific interventions in the main text show that endpoint mes
 
 **Important caveat.** The receiver-semantics effects reported here are *observational* (conditioned on sender identity), not interventional. They describe sender-conditioned structure but do not isolate a causal mechanism.
 
+For the sender- and receiver-semantics summaries in this appendix, we discretize each agent's noisy private signal into five bins, denoted $\fhat_{\text{bin}}$: $\fhat < 1.5$ (low), $1.5 \le \fhat < 2.5$, $2.5 \le \fhat < 3.5$, $3.5 \le \fhat < 4.5$, and $\fhat \ge 4.5$ (high). We then summarize $P(m_i = 1 \mid \fhat_{\text{bin}})$ and $P(a_j = C \mid m_i, \fhat_{\text{bin}})$ by sender identity. When we refer to low and high bins for polarity, we mean $\fhat < 1.5$ and $\fhat \ge 4.5$, respectively.
+
+## Early frozen-endpoint summaries
+
+For completeness, Table \ref{tab:frozen_endpoint_50k} reports the frozen endpoint intervention effects at 50k for the same mixed-motive regime shown in the main text. These early endpoint effects are already small in aggregate, which is why the main text focuses Table \ref{tab:frozen_endpoint} on the final 150k checkpoint.
+
+```{=latex}
+\begin{table}[H]
+  \caption{Frozen-checkpoint intervention effects in the mixed-motive regime ($f\!=\!3.5$) at the 50k checkpoint. $\Delta P(C)$ is computed as natural $-$ intervened, so positive values mean natural messages helped and negative values mean the intervention outperformed natural messages. Mean $\pm$ SEM over 15 seeds.}
+  \tablabel{frozen_endpoint_50k}
+  \centering
+  \small
+  \begin{tabular}{lc}
+    \toprule
+    Intervention & 50k \\
+    \midrule
+    \texttt{zeros}           & $\TFRZerosFk \pm \TFRZerosFkSEM$ \\
+    \texttt{fixed0}          & $\TFRFixZeroFk \pm \TFRFixZeroFkSEM$ \\
+    \texttt{public\_random}  & $\TFRPubFk \pm \TFRPubFkSEM$ \\
+    \texttt{indep\_random}   & $\TFRIndepFk \pm \TFRIndepFkSEM$ \\
+    \texttt{sender\_shuffle} & $\TFRShuffleFk \pm \TFRShuffleFkSEM$ \\
+    \texttt{permute\_slots}  & $\TFRPermuteFk \pm \TFRPermuteFkSEM$ \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+```
+
+For completeness on self-conditioning, the 150k frozen sender-causal probe also shows that self-pair effects are only modestly larger than non-self effects: mean absolute self-pair effects are $\TSCAbsSelfThreeFive\pp$ at $f\!=\!3.5$ and $\TSCAbsSelfFiveZero\pp$ at $f\!=\!5.0$, versus $\TSCAbsThreeFive\pp$ and $\TSCAbsFiveZero\pp$ for non-self pairs in the main text. The endpoint channel is therefore not merely a private memory device.
+
 ## Per-sender disaggregation reveals hidden structure
 
 For each receiver $j$ and sender $i$, we compute the per-sender token effect within observation bins:
@@ -576,7 +581,7 @@ $$ {#eq-agg}
 
 ```{=latex}
 \begin{table}[H]
-  \caption{Aggregate versus per-sender token effects across training. Aggregate effects are near zero due to convention cancellation, while sender-conditioned effects (mean $|\delta_{i \to j}|$) remain large. Mean over 15 seeds.}
+  \caption{Aggregate versus per-sender token effects across training. Aggregate effects are near zero due to convention cancellation, while sender-conditioned effects (mean $|\delta_{i \to j}|$) remain large. Means with 95\% bootstrap CIs over 15 training seeds.}
   \tablabel{disagg}
   \centering
   \small
@@ -586,8 +591,8 @@ $$ {#eq-agg}
     \cmidrule(lr){2-4}
     Metric & 50k & 100k & 150k \\
     \midrule
-    Aggregate token effect     & $\TVaggFk$ & $\TVaggHk$ & $\TVaggOfk$ \\
-    Per-sender token effect    & $\TVpsFk$ & $\TVpsHk$  & $\TVpsOfk$ \\
+    Aggregate token effect     & $\TVaggFk\;\TVaggFkCI$ & $\TVaggHk\;\TVaggHkCI$ & $\TVaggOfk\;\TVaggOfkCI$ \\
+    Per-sender token effect    & $\TVpsFk\;\TVpsFkCI$ & $\TVpsHk\;\TVpsHkCI$  & $\TVpsOfk\;\TVpsOfkCI$ \\
     Ratio (per-sender / |agg.|)  & $\TVratioFk$ & $\TVratioHk$ & $\TVratioOfk$ \\
     \bottomrule
   \end{tabular}
@@ -663,61 +668,79 @@ The aggregate cancellation occurs because sender-indexed conventions often adopt
 
 Across \TVInSeeds{} seeds, alignment trajectories are heterogeneous: some seeds show stable alignment, while others flip or lose it between 50k and 150k. This confirms that convention formation in independent-learner MARL is stochastic rather than converging reliably to one shared code.
 
-# Appendix D: Separate-training channel controls (exploratory, 3 seeds) {#sec-app-separate}
+# Appendix D: Additional diagnostics on the $f\!=\!5.0$ reversal mechanism {#sec-app-f50-mech}
 
-This exploratory experiment trains agents from scratch under four channel modes for 50k episodes: \texttt{learned} (sender's actual message), \texttt{always\_zero} (all sender slots forced to 0), \texttt{indep\_random} (sender slots randomized independently each round), and \texttt{public\_random} (all sender slots share the same random bit each round). The learned condition uses 5 seeds; controls use 3.
+The main text leaves a narrower question than whether communication is ``good'' or ``bad'' in general: why does the descriptive gap reverse at $f\!=\!5.0$ by 150k even though communication remains beneficial at $f\!=\!3.5$? Two broad explanations are plausible: (i) the communication architecture may simply slow convergence toward individually rational cooperation, or (ii) training in mixed-motive regimes may induce conditional strategies that do not fully disengage once the cooperative regime is entered. The analyses in this appendix are explanatory diagnostics on the completed 15-seed checkpoints rather than a new primary identification design, but they help distinguish which interpretation is better supported.
+
+## Checkpoint timing: early parity, late divergence
 
 ```{=latex}
 \begin{table}[H]
-  \caption{Cooperation at $f\!=\!3.5$ after 50k episodes under different channel modes, trained from scratch. Exploratory (3 seeds per control, 5 for learned).}
-  \tablabel{separate_controls}
+  \caption{Greedy checkpoint means at $f\!=\!5.0$ for the main communication and no-communication branches. Communication is not behind early; the gap opens only later. Mean cooperation (\%) over 15 seeds.}
+  \tablabel{f50_timing}
   \centering
   \small
-  \begin{tabular}{lc}
+  \begin{tabular}{lcccc}
     \toprule
-    Channel mode & $\pcoopgiven{f\!=\!3.5}$ \\
+    Condition & 25k & 50k & 100k & 150k \\
     \midrule
-    \texttt{learned}        & $\mathbf{\TIILearned}$ \\
-    \texttt{indep\_random}  & $\TIIIndep$ \\
-    \texttt{always\_zero}   & $\TIIZero$ \\
-    \texttt{public\_random} & $\TIIPub$ \\
+    \texttt{comm\_symm}     & 62.0 & 76.1 & 55.6 & 56.1 \\
+    \texttt{no\_comm\_symm} & 61.7 & 73.2 & 64.9 & 80.0 \\
     \bottomrule
   \end{tabular}
 \end{table}
 ```
 
-Because this design confounds channel mode with the entire training trajectory, it should be read as suggestive rather than decisive. The table is provided for transparency.
+This timing pattern is hard to reconcile with a pure ``communication architecture is always slower'' account. At $f\!=\!5.0$, communication is essentially tied with no-communication at 25k and ahead at 50k; the degradation appears later. The checkpoint-trend summary makes the same point from another angle: from 50k to 150k, communication drops by $20.0\pp$ on average at $f\!=\!5.0$, whereas no-communication rises by $6.8\pp$. Communication also declines over the same interval at $f\!=\!3.5$, so the issue is not late instability unique to the cooperative regime. What needs explaining is why this late drift produces a reversal at $f\!=\!5.0$ but not at $f\!=\!3.5$.
 
-# Appendix E: Mute experiment details (exploratory, 3 seeds) {#sec-app-mute}
+![Online training curves with greedy checkpoint anchors at $f\!=\!3.5$ and $f\!=\!5.0$. Solid curves show sampled on-policy training behavior and therefore remain descriptive; dotted markers show greedy checkpoint evaluation at 25k, 50k, 100k, and 150k. The vertical line marks the 50k continuation boundary. The key pattern is early parity and later divergence, not a uniformly worse communication branch from the start.](../../outputs/eval/paper_strengthen/iter9_online_vs_checkpoint_15seeds/online_vs_checkpoint_f35_f50.png){#fig-online-vs-checkpoint fig-pos="H"}
 
-The mute-after-50k experiment trains with learned communication until 50k, then delivers silence (all-zero messages) for the remaining 100k episodes while senders continue to compute and update message outputs. This tests whether the action policy can function without the message inputs it was trained on. With only 3 seeds, this result is exploratory.
+## Same-checkpoint controls: no positive learned-content effect at $f\!=\!5.0$
+
+Within the fixed communication architecture, same-checkpoint continuation controls already rule out a simple positive learned-content explanation for the late $f\!=\!5.0$ behavior. At 150k, the learned branch reaches 56.1\% cooperation at $f\!=\!5.0$, compared with 54.4\% under \texttt{always\_zero}, 61.4\% under \texttt{public\_random}, and 63.1\% under \texttt{indep\_random}. The matched-stat \texttt{sender\_shuffle} continuation control does better still at 72.0\%. The contrast with $f\!=\!3.5$ is the key point: there, learned communication still stays above all of the basic controls. So the communication policy appears to retain conditional machinery in both regimes, but only the mixed regime still rewards it at 150k.
+
+## Spell-conditioned endpoint audit: history matters more than messages
+
+We next examined the final 150k checkpoints under greedy evaluation while conditioning on spell age since entry into the current $f\!=\!5.0$ episode segment. The goal was not to estimate a new causal effect size, but to ask what kind of intervention most changes the poor late-$f\!=\!5.0$ behavior in the communication condition: message corruption, or perturbations to temporal/history features in the wrapped observation.
 
 ```{=latex}
 \begin{table}[H]
-  \caption{Cooperation and welfare at $f\!=\!3.5$ at 150k. Muting after 50k produces cooperation \emph{below} the no-communication baseline. Exploratory (3 seeds for mute condition; 15 for comm and no-comm).}
-  \tablabel{mute}
+  \caption{Selected spell-conditioned diagnostics at $f\!=\!5.0$ from the final 150k checkpoints. Entries are mean cooperation (\%) over 15 seeds. ``Switch'' denotes the first round after entering an $f\!=\!5.0$ spell; ``21+'' denotes long cooperative spells.}
+  \tablabel{f50_spell_audit}
   \centering
   \small
-  \begin{tabular}{lcc}
+  \begin{tabular}{lccc}
     \toprule
-    Condition & $\pcoopgiven{f\!=\!3.5}$ & Welfare ($f\!=\!3.5$) \\
+    Variant & Overall & Switch & 21+ \\
     \midrule
-    \texttt{comm\_symm} (channel stays on)    & $\TIVcommCoop$ & $\TIVcommWelf$ \\
-    \texttt{no\_comm\_symm} (never had channel) & $\TIVncCoop$ & $\TIVncWelf$ \\
-    \texttt{mute-after-50k}                   & $\TIVmuteCoop$ & $\TIVmuteWelf$ \\
+    \texttt{cond1} natural & 55.5 & 72.0 & 50.7 \\
+    \texttt{cond2} natural & 80.4 & 64.9 & 80.0 \\
+    \midrule
+    \texttt{cond1} + \texttt{zeros} & 56.0 & 67.1 & 52.4 \\
+    \texttt{cond1} + \texttt{public\_random} & 57.6 & 68.9 & 53.1 \\
+    \texttt{cond1} + \texttt{sender\_shuffle} & 57.4 & 72.3 & 52.0 \\
+    \midrule
+    \texttt{cond1} + \texttt{zero\_ewma} & 79.0 & 80.4 & 77.8 \\
+    \texttt{cond1} + \texttt{clamp\_temporal\_low} & 80.0 & 80.8 & 78.7 \\
+    \texttt{cond1} + \texttt{clamp\_temporal\_high} & 23.6 & 24.2 & 23.2 \\
     \bottomrule
   \end{tabular}
 \end{table}
 ```
 
-The cooperation deficit ($-\pvMuteBelowPP\pp$ relative to no-communication) is consistent with structural dependence, but with only 3 seeds it should be treated as suggestive rather than definitive.
+Three features of Table \ref{tab:f50_spell_audit} are especially informative.
 
-# Appendix F: Online training curves {#sec-app-online}
+First, the late-$f\!=\!5.0$ decay is real and asymmetric across conditions. In the communication condition, cooperation starts relatively high immediately after a regime switch (72.0\%) but falls steadily across longer $f\!=\!5.0$ spells, reaching 50.7\% in the 21+ bucket. The no-communication condition shows the opposite qualitative pattern: it starts lower right after the switch (64.9\%) and remains high in long cooperative spells (80.0\% overall; 80.0\% in the 21+ bucket). This is the pattern expected under a late conditionality or overwrite account, not under a pure always-slower architecture account.
 
-![Dense online training curves with sparse checkpoint anchors for the two most informative multipliers. Solid lines show sampled training-window behavior from 1k to 150k; shaded bands are SEM across 15 seeds. Dashed lines with dots show greedy checkpoint evaluation at 25k, 50k, 100k, and 150k. The vertical marker at 50k indicates the continuation boundary between the initial 1k--50k run and the 55k--150k extension.](../../outputs/eval/paper_strengthen/iter9_online_vs_checkpoint_15seeds/online_vs_checkpoint_f35_f50.png){#fig-coop-trajectory fig-pos="t"}
+Second, corrupting the online message stream leaves the decay largely intact. Replacing natural messages with zeros, public random bits, or sender-shuffled bits changes the communication-condition mean only modestly (roughly 56--58\% overall, versus 55.5\% natural), and the long-spell bucket remains near 52--53\%. So the poor 150k performance at $f\!=\!5.0$ is not primarily an endpoint dependence on the exact online message content.
 
-These curves mix sampled training-window behavior with greedy checkpoint evaluation, so they should be read descriptively rather than as the paper's main identification result. The sharp break at 50k marks the continuation seam between the original 1k--50k run and the resumed 55k--150k extension.
+Third, intervening on temporal/history features changes behavior much more strongly. Zeroing the EWMA cooperation signal or clamping the temporal-history proxy low raises $f\!=\!5.0$ cooperation to about 79--80\%, close to the no-communication level, while clamping that proxy high collapses cooperation to about 24\%. This indicates that the problematic late policy is strongly history-conditioned: by 150k, the communication-trained agents appear to be using temporal or lagged social features in a way that is maladaptive within long cooperative spells.
 
+## Interpretation and scope
+
+Taken together, these diagnostics support explanation (ii) more strongly than explanation (i). The communication branch is not handicapped from the start; it is competitive or better early at $f\!=\!5.0$ and only falls behind later. Same-checkpoint controls then show why this late drift matters differently across regimes: at $f\!=\!3.5$, learned communication still outperforms the basic controls, so conditional responses retain strategic value, whereas at $f\!=\!5.0$ the same learned channel offers no corresponding advantage. Finally, the poor late-$f\!=\!5.0$ state is much more sensitive to temporal/history features than to message corruption. The most coherent reading is therefore that mixed-regime conditionality remains encoded in the communication policy and fails to disengage in long cooperative spells.
+
+We do not claim that architecture cost is absent. These diagnostics do not retrain an exactly capacity-matched no-message architecture under a continuation protocol, so a contribution from extra inputs or optimization complexity cannot be ruled out completely. But the current evidence is more consistent with a late mixed-regime conditioning or overwrite story than with a purely static architecture-complexity explanation.
 
 ```{=latex}
 \newpage

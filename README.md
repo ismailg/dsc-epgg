@@ -21,10 +21,23 @@ Example Outcome:
 
 ## Current Data Location Guide
 
-For the current local run roots, checkpoint/eval paths, and legacy-path traps, start with:
+This repo now coexists with a newer straight vectorized phase-3 training family in the sibling
+[`dsc-epgg-vectorized`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized) repo. Do not assume that
+all phase-3 results come from one interchangeable pipeline.
 
+Start with these docs:
+
+- [`PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md)
 - [`DATA_MAP.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/DATA_MAP.md)
+- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/DATA_MAP.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/DATA_MAP.md)
 - [`outputs/data_catalog/DATA_CATALOG.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/outputs/data_catalog/DATA_CATALOG.md)
+
+Use the following rule:
+
+- `phase3_staged` = the current manuscript-facing family in this repo
+- `phase3_vecstraight` = the newer straight vectorized family in `dsc-epgg-vectorized`
+- never compare or reuse intervention results across those families unless the analysis was rerun on
+  the target family
 
 ## Project Features & Repository Structure
 

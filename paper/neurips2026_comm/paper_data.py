@@ -63,6 +63,13 @@ VALUE_SURFACE_CSV = DATA_ROOT / "paper_strengthen" / "iter0_value_surface" / "va
 SENDER_CAUSAL_MATRIX_CSV = (
     DATA_ROOT / "paper_strengthen" / "iter2_sender_causal_15seeds" / "sender_causal_matrix.csv"
 )
+SENDER_CAUSAL_SELF_OTHER_CSV = (
+    DATA_ROOT
+    / "paper_strengthen"
+    / "iter2_sender_causal_15seeds"
+    / "summary_self_other"
+    / "sender_causal_overall_summary.csv"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1106,6 +1113,7 @@ class PaperData:
     t3_is_sameckpt: bool
     t4_frozen: List[FrozenInterventionRow]
     sender_causal: List[SenderCausalRow]
+    sender_causal_self_other: Dict[Tuple[str, str], Dict[str, float]]
     t4: Table4
     t5: List[Table5Row]
     t6: List[AlignmentRow]
@@ -1176,12 +1184,34 @@ def _load_sender_shuffle_sameckpt_50k() -> Dict[str, object]:
     return result
 
 
+def load_sender_causal_self_other() -> Dict[Tuple[str, str], Dict[str, float]]:
+    """Load self vs non-self sender-causal summaries for the 150k endpoint probe."""
+    if not SENDER_CAUSAL_SELF_OTHER_CSV.exists():
+        return {}
+
+    rows = _read_csv(SENDER_CAUSAL_SELF_OTHER_CSV)
+    out: Dict[Tuple[str, str], Dict[str, float]] = {}
+    for r in rows:
+        summary = r.get("summary", "")
+        if summary not in ("overall_self", "overall_nonself"):
+            continue
+        f_value = f"{float(r.get('true_f', 'nan')):.1f}"
+        out[(summary, f_value)] = {
+            "mean_delta": _float(r, "mean_delta_p_cooperate"),
+            "mean_abs_delta": _float(r, "mean_abs_delta_p_cooperate"),
+            "flip0": _float(r, "mean_flip_rate_force0"),
+            "flip1": _float(r, "mean_flip_rate_force1"),
+        }
+    return out
+
+
 def load_all() -> PaperData:
     t1 = load_table1()
     t2 = load_table2()
     t3 = load_table3()
     t4_frozen = load_table4_frozen()
     sender_causal = load_sender_causal()
+    sender_causal_self_other = load_sender_causal_self_other()
     t4 = load_table4()
     t5 = load_table5()
     t6 = load_table6()
@@ -1192,6 +1222,7 @@ def load_all() -> PaperData:
         t3_is_sameckpt=table3_is_sameckpt(),
         t4_frozen=t4_frozen,
         sender_causal=sender_causal,
+        sender_causal_self_other=sender_causal_self_other,
         t4=t4, t5=t5, t6=t6,
         prose=prose,
         sender_shuffle_150k_f35_mean=sender_shuffle.get("mean_f35", float("nan")),
@@ -1393,12 +1424,25 @@ def generate_defs_tex(d: PaperData) -> str:
         tag = causal_labels.get(row.f_value, row.f_value.replace(".", ""))
         D(f"TSCDelta{tag}", fmt_delta(row.mean_delta * 100.0, 1),
           f"sender-causal mean delta at f={row.f_value} (pp)")
+        D(f"TSCDelta{tag}CI",
+          f"[{row.mean_delta_ci_lo * 100.0:+.1f},\\,{row.mean_delta_ci_hi * 100.0:+.1f}]",
+          f"sender-causal mean delta CI at f={row.f_value} (pp)")
         D(f"TSCAbs{tag}", f"{row.mean_abs_delta * 100.0:.1f}",
           f"sender-causal mean abs delta at f={row.f_value} (pp)")
+        D(f"TSCAbs{tag}CI",
+          f"[{row.mean_abs_delta_ci_lo * 100.0:+.1f},\\,{row.mean_abs_delta_ci_hi * 100.0:+.1f}]",
+          f"sender-causal mean abs delta CI at f={row.f_value} (pp)")
         D(f"TSCFlipZero{tag}", f"{row.flip0 * 100.0:.1f}",
           f"sender-causal flip0 at f={row.f_value} (%)")
         D(f"TSCFlipOne{tag}", f"{row.flip1 * 100.0:.1f}",
           f"sender-causal flip1 at f={row.f_value} (%)")
+    for summary, prefix in (("overall_self", "Self"), ("overall_nonself", "Nonself")):
+        for f_value, tag in causal_labels.items():
+            row = d.sender_causal_self_other.get((summary, f_value))
+            if row is None:
+                continue
+            D(f"TSCAbs{prefix}{tag}", f"{row['mean_abs_delta'] * 100.0:.1f}",
+              f"{summary} sender-causal mean abs delta at f={f_value} (pp)")
     lines.append("")
     lines.append("% Table 6: mute experiment")
     D("TIVcommCoop", fmt(d.t4.comm_coop), "comm coop at 150k")
@@ -1418,7 +1462,13 @@ def generate_defs_tex(d: PaperData) -> str:
     for row in d.t5:
         el = t5_ep_labels[row.episode]
         D(f"TVagg{el}", fmt(row.agg_effect), f"aggregate {row.episode//1000}k")
+        D(f"TVagg{el}CI",
+          f"[{row.agg_ci_lo:+.3f},\\,{row.agg_ci_hi:+.3f}]",
+          f"aggregate {row.episode//1000}k CI")
         D(f"TVps{el}", fmt(row.per_sender_effect), f"per-sender {row.episode//1000}k")
+        D(f"TVps{el}CI",
+          f"[{row.per_sender_ci_lo:+.3f},\\,{row.per_sender_ci_hi:+.3f}]",
+          f"per-sender {row.episode//1000}k CI")
         if row.ratio is not None:
             D(f"TVratio{el}", f"{row.ratio:.1f}\\times", f"ratio {row.episode//1000}k")
         else:

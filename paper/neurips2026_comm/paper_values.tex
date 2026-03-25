@@ -123,25 +123,45 @@
 
 % Table 5: endpoint sender-causal probe
 \def\TSCDeltaZeroFive{-0.0}  % sender-causal mean delta at f=0.5 (pp)
+\def\TSCDeltaZeroFiveCI{[-0.0,\,+0.0]}  % sender-causal mean delta CI at f=0.5 (pp)
 \def\TSCAbsZeroFive{0.1}  % sender-causal mean abs delta at f=0.5 (pp)
+\def\TSCAbsZeroFiveCI{[+0.1,\,+0.2]}  % sender-causal mean abs delta CI at f=0.5 (pp)
 \def\TSCFlipZeroZeroFive{0.1}  % sender-causal flip0 at f=0.5 (%)
 \def\TSCFlipOneZeroFive{0.1}  % sender-causal flip1 at f=0.5 (%)
 \def\TSCDeltaOneFive{-0.0}  % sender-causal mean delta at f=1.5 (pp)
+\def\TSCDeltaOneFiveCI{[-0.3,\,+0.3]}  % sender-causal mean delta CI at f=1.5 (pp)
 \def\TSCAbsOneFive{0.9}  % sender-causal mean abs delta at f=1.5 (pp)
+\def\TSCAbsOneFiveCI{[+0.6,\,+1.3]}  % sender-causal mean abs delta CI at f=1.5 (pp)
 \def\TSCFlipZeroOneFive{0.7}  % sender-causal flip0 at f=1.5 (%)
 \def\TSCFlipOneOneFive{0.6}  % sender-causal flip1 at f=1.5 (%)
 \def\TSCDeltaTwoFive{-0.7}  % sender-causal mean delta at f=2.5 (pp)
+\def\TSCDeltaTwoFiveCI{[-2.6,\,+1.2]}  % sender-causal mean delta CI at f=2.5 (pp)
 \def\TSCAbsTwoFive{7.7}  % sender-causal mean abs delta at f=2.5 (pp)
+\def\TSCAbsTwoFiveCI{[+6.4,\,+9.3]}  % sender-causal mean abs delta CI at f=2.5 (pp)
 \def\TSCFlipZeroTwoFive{7.3}  % sender-causal flip0 at f=2.5 (%)
 \def\TSCFlipOneTwoFive{6.9}  % sender-causal flip1 at f=2.5 (%)
 \def\TSCDeltaThreeFive{+0.3}  % sender-causal mean delta at f=3.5 (pp)
+\def\TSCDeltaThreeFiveCI{[-0.4,\,+1.0]}  % sender-causal mean delta CI at f=3.5 (pp)
 \def\TSCAbsThreeFive{5.0}  % sender-causal mean abs delta at f=3.5 (pp)
+\def\TSCAbsThreeFiveCI{[+4.1,\,+5.9]}  % sender-causal mean abs delta CI at f=3.5 (pp)
 \def\TSCFlipZeroThreeFive{12.2}  % sender-causal flip0 at f=3.5 (%)
 \def\TSCFlipOneThreeFive{12.9}  % sender-causal flip1 at f=3.5 (%)
 \def\TSCDeltaFiveZero{+0.4}  % sender-causal mean delta at f=5.0 (pp)
+\def\TSCDeltaFiveZeroCI{[-0.5,\,+1.1]}  % sender-causal mean delta CI at f=5.0 (pp)
 \def\TSCAbsFiveZero{3.8}  % sender-causal mean abs delta at f=5.0 (pp)
+\def\TSCAbsFiveZeroCI{[+3.2,\,+4.3]}  % sender-causal mean abs delta CI at f=5.0 (pp)
 \def\TSCFlipZeroFiveZero{9.8}  % sender-causal flip0 at f=5.0 (%)
 \def\TSCFlipOneFiveZero{11.5}  % sender-causal flip1 at f=5.0 (%)
+\def\TSCAbsSelfZeroFive{0.1}  % overall_self sender-causal mean abs delta at f=0.5 (pp)
+\def\TSCAbsSelfOneFive{1.0}  % overall_self sender-causal mean abs delta at f=1.5 (pp)
+\def\TSCAbsSelfTwoFive{8.1}  % overall_self sender-causal mean abs delta at f=2.5 (pp)
+\def\TSCAbsSelfThreeFive{5.7}  % overall_self sender-causal mean abs delta at f=3.5 (pp)
+\def\TSCAbsSelfFiveZero{4.0}  % overall_self sender-causal mean abs delta at f=5.0 (pp)
+\def\TSCAbsNonselfZeroFive{0.1}  % overall_nonself sender-causal mean abs delta at f=0.5 (pp)
+\def\TSCAbsNonselfOneFive{0.9}  % overall_nonself sender-causal mean abs delta at f=1.5 (pp)
+\def\TSCAbsNonselfTwoFive{7.7}  % overall_nonself sender-causal mean abs delta at f=2.5 (pp)
+\def\TSCAbsNonselfThreeFive{5.0}  % overall_nonself sender-causal mean abs delta at f=3.5 (pp)
+\def\TSCAbsNonselfFiveZero{3.8}  % overall_nonself sender-causal mean abs delta at f=5.0 (pp)
 
 % Table 6: mute experiment
 \def\TIVcommCoop{0.536}  % comm coop at 150k
@@ -155,13 +175,19 @@
 
 % Table 7: aggregate vs per-sender token effects
 \def\TVaggFk{-0.000}  % aggregate 50k
+\def\TVaggFkCI{[-0.028,\,+0.025]}  % aggregate 50k CI
 \def\TVpsFk{0.218}  % per-sender 50k
+\def\TVpsFkCI{[+0.198,\,+0.238]}  % per-sender 50k CI
 \def\TVratioFk{---}  % ratio 50k (agg~0)
 \def\TVaggHk{-0.008}  % aggregate 100k
+\def\TVaggHkCI{[-0.019,\,+0.004]}  % aggregate 100k CI
 \def\TVpsHk{0.178}  % per-sender 100k
+\def\TVpsHkCI{[+0.156,\,+0.200]}  % per-sender 100k CI
 \def\TVratioHk{23.3\times}  % ratio 100k
 \def\TVaggOfk{0.003}  % aggregate 150k
+\def\TVaggOfkCI{[-0.012,\,+0.019]}  % aggregate 150k CI
 \def\TVpsOfk{0.186}  % per-sender 150k
+\def\TVpsOfkCI{[+0.166,\,+0.206]}  % per-sender 150k CI
 \def\TVratioOfk{---}  % ratio 150k (agg~0)
 
 % Table 8: polarity alignment (summary over 15 seeds)
