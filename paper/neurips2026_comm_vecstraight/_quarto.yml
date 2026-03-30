@@ -1,0 +1,18 @@
+project:
+  type: default
+  output-dir: _output
+
+format:
+  acm-pdf:
+    classoption: [manuscript, review, anonymous]
+    acm-journal: PACMHCI
+    keep-tex: true
+    toc: false
+    number-sections: true
+    colorlinks: true
+
+bibliography: refs.bib
+engine: jupyter
+execute:
+  echo: false
+  warning: false

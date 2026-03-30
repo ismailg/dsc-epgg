@@ -1,0 +1,1504 @@
+---
+title: "Coordination Without Portable Codes in a Hidden-Regime Social Dilemma"
+author:
+  - name: Anonymous
+    affiliation:
+      - name: Anonymous Institution
+        country: Anonymous
+        city: Anonymous
+format:
+  acm-pdf:
+    classoption: [manuscript, review, anonymous]
+    acm-journal: PACMHCI
+    keep-tex: true
+acm-metadata:
+  copyright: none
+  copyright-year: "2026"
+  acm-year: "2026"
+  doi: "XXXXXXX.XXXXXXX"
+bibliography: refs.bib
+header-includes:
+  - \usepackage{enumitem}
+  - \usepackage{multirow}
+  - \providecommand{\pp}{\,\mathrm{pp}}
+  - \renewcommand{\pp}{\,\mathrm{pp}}
+  - \providecommand{\commgap}{\Delta_{\mathrm{comm}}}
+  - \providecommand{\fhat}{\hat{f}}
+abstract: |
+  We study emergent communication in a four-agent public goods game with hidden regime switching, noisy private observations, and binary messaging under independent PPO. Communication-trained agents outperform no-communication agents by $+16.4\pp$ at the mixed-motive multiplier and $+18.8\pp$ at the cooperation-dominant multiplier over 15 seeds. Frozen-policy interventions, single-slot sender probes, and cross-seed surrogate models decompose this endpoint dependence into three forms: stable variable signal input provides the dominant benefit, coarse shared summaries add smaller regime-dependent value, and rich sender-specific conventions---behaviorally large within a trained population---do not generalize across independently trained seeds. The learned endpoint protocol is real but not uniquely privileged: several random or shuffled replacements perform comparably, and a constant token of 1 slightly outperforms the natural stream at the cooperation-dominant regime.
+keywords:
+  - emergent communication
+  - multi-agent reinforcement learning
+  - public goods game
+  - coordination devices
+  - convention formation
+---
+
+```{python}
+#| echo: false
+#| include: false
+import csv
+import math
+from decimal import Decimal, ROUND_HALF_UP
+from pathlib import Path
+
+REPO_ROOT = Path("../..").resolve()
+EVAL_ROOT = REPO_ROOT / "outputs" / "eval"
+HETZNER_RESULTS_ROOT = REPO_ROOT / "hetzner-results"
+
+
+def load_csv(path):
+    with Path(path).open() as f:
+        return list(csv.DictReader(f))
+
+
+def quantize(value, places=1):
+    quantum = Decimal("1").scaleb(-places)
+    return Decimal(str(value)).quantize(quantum, rounding=ROUND_HALF_UP)
+
+
+def fmt_num(value, places=1):
+    return f"{quantize(value, places):.{places}f}"
+
+
+def fmt_rate(value, places=4):
+    return fmt_num(float(value), places)
+
+
+def fmt_pct(value, places=1):
+    return fmt_num(100.0 * float(value), places)
+
+
+def fmt_signed_num(value, places=1):
+    text = fmt_num(value, places)
+    return text if text.startswith("-") else f"+{text}"
+
+
+def fmt_pp(delta, places=1):
+    return f"{fmt_signed_num(100.0 * float(delta), places)}\\pp"
+
+
+def fmt_abs_pp(value, places=1):
+    return f"{fmt_num(100.0 * float(value), places)}\\pp"
+
+
+def fmt_pct_pm(mean, sem, places=1):
+    return f"{fmt_pct(mean, places)} \\pm {fmt_pct(sem, places)}"
+
+
+def fmt_pp_pm(mean, sem, places=1):
+    return f"{fmt_signed_num(100.0 * float(mean), places)} \\pm {fmt_num(100.0 * float(sem), places)}\\pp"
+
+
+def fmt_abs_pp_pm(mean, sem, places=1):
+    return f"{fmt_num(100.0 * float(mean), places)} \\pm {fmt_num(100.0 * float(sem), places)}\\pp"
+
+
+def math_text(text):
+    return f"${text}$"
+
+
+def pct_math(value, places=1):
+    return math_text(f"{fmt_pct(value, places)}\\%")
+
+
+def pp_math(delta, places=1):
+    return math_text(fmt_pp(delta, places))
+
+
+def abs_pp_math(value, places=1):
+    return math_text(fmt_abs_pp(value, places))
+
+
+def ppnum_math(value, places=1):
+    return math_text(f"{fmt_num(value, places)}\\pp")
+
+
+def pct_pm_math(mean, sem, places=1):
+    return math_text(fmt_pct_pm(mean, sem, places))
+
+
+def pp_pm_math(mean, sem, places=1):
+    return math_text(fmt_pp_pm(mean, sem, places))
+
+
+def abs_pp_pm_math(mean, sem, places=1):
+    return math_text(fmt_abs_pp_pm(mean, sem, places))
+
+
+def ci_pp_math(low, high, places=1):
+    return math_text(
+        f"[{fmt_signed_num(100.0 * float(low), places)},{fmt_signed_num(100.0 * float(high), places)}]\\pp"
+    )
+
+
+def tex_tt(label):
+    escaped = label.replace("_", r"\_")
+    return f"\\texttt{{{escaped}}}"
+
+
+def lookup_one(rows, **kwargs):
+    matches = [row for row in rows if all(row[key] == str(value) for key, value in kwargs.items())]
+    if len(matches) != 1:
+        raise KeyError((kwargs, len(matches)))
+    return matches[0]
+
+
+def mean_and_sem(values):
+    vals = [float(v) for v in values]
+    mean = sum(vals) / len(vals)
+    if len(vals) == 1:
+        return mean, 0.0
+    sem = math.sqrt(sum((x - mean) ** 2 for x in vals) / (len(vals) - 1)) / math.sqrt(len(vals))
+    return mean, sem
+
+
+# --- Base gap data ---
+GAP_ROWS = load_csv(
+    EVAL_ROOT / "phase3_vectorized_comm_gap_15seeds_local_20260325" / "exact_f_gap_table.csv"
+)
+GAP_LOOKUP = {(row["f_value"], row["checkpoint_episode"]): row for row in GAP_ROWS}
+BASE_F_VALUES = ["3.500", "5.000"]
+BASE_CHECKPOINTS = ["25000", "50000", "100000", "150000"]
+
+
+def gap_row(f_value, checkpoint_episode):
+    return GAP_LOOKUP[(f_value, checkpoint_episode)]
+
+
+def gap_value(f_value, checkpoint_episode, field):
+    return float(gap_row(f_value, checkpoint_episode)[field])
+
+
+# --- Frozen endpoint data ---
+FROZEN_50_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_frozen50k_expanded_15seeds_local_20260327"
+    / "report"
+    / "intervention_suite_summary.csv"
+)
+FROZEN_150_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_frozen150k_expanded_15seeds_local_20260327"
+    / "report"
+    / "intervention_suite_summary.csv"
+)
+FROZEN_ROWS = FROZEN_50_ROWS + FROZEN_150_ROWS
+FROZEN_LOOKUP = {
+    (row["checkpoint_episode"], row["f_value"], row["ablation"], row["condition"]): row
+    for row in FROZEN_ROWS
+}
+
+
+def frozen_condition(mode):
+    return "cond2" if mode == "baseline_none" else "cond1"
+
+
+def has_frozen_mode(checkpoint_episode, f_value, mode):
+    return (checkpoint_episode, f_value, mode, frozen_condition(mode)) in FROZEN_LOOKUP
+
+
+def frozen_mode_row(checkpoint_episode, f_value, mode):
+    return FROZEN_LOOKUP[(checkpoint_episode, f_value, mode, frozen_condition(mode))]
+
+
+def frozen_mode_mean(checkpoint_episode, f_value, mode):
+    return float(frozen_mode_row(checkpoint_episode, f_value, mode)["mean_coop_rate"])
+
+
+def frozen_delta_vs_natural(checkpoint_episode, f_value, mode):
+    return frozen_mode_mean(checkpoint_episode, f_value, mode) - frozen_mode_mean(
+        checkpoint_episode, f_value, "none"
+    )
+
+
+def frozen_damage_vs_natural(checkpoint_episode, f_value, mode):
+    return -frozen_delta_vs_natural(checkpoint_episode, f_value, mode)
+
+
+# --- Sender-causal data ---
+SENDER_OVERALL_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_sender_causal_150k_15seeds_local_20260325"
+    / "report"
+    / "sender_causal_overall_summary.csv"
+)
+SENDER_TOP_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_sender_causal_150k_15seeds_local_20260325"
+    / "report"
+    / "sender_causal_top_pairs.csv"
+)
+
+
+def sender_overall(summary, f_value):
+    return lookup_one(SENDER_OVERALL_ROWS, summary=summary, true_f=f_value)
+
+
+def sender_top_pair(f_value):
+    rows = [row for row in SENDER_TOP_ROWS if row["true_f"] == f_value]
+    return max(rows, key=lambda row: abs(float(row["mean_delta_p_cooperate"])))
+
+
+def sender_pair_label(f_value):
+    row = sender_top_pair(f_value)
+    return f"{row['sender_id']} -> {row['receiver_id']}"
+
+
+# --- Low-dimensional mechanism data ---
+LOWDIM_COUNT_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_frozen150k_expanded_15seeds_local_20260327"
+    / "report"
+    / "lowdim_mechanism"
+    / "count_response_summary.csv"
+)
+LOWDIM_ANY_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_frozen150k_expanded_15seeds_local_20260327"
+    / "report"
+    / "lowdim_mechanism"
+    / "any_token_response_summary.csv"
+)
+LOWDIM_PATTERN_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_frozen150k_expanded_15seeds_local_20260327"
+    / "report"
+    / "lowdim_mechanism"
+    / "pattern_seed_summary.csv"
+)
+LOWDIM_SURROGATE_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_frozen150k_expanded_15seeds_local_20260327"
+    / "report"
+    / "lowdim_mechanism"
+    / "surrogate_model_summary.csv"
+)
+
+
+def lowdim_count_row(f_value, count_ones):
+    return lookup_one(LOWDIM_COUNT_ROWS, true_f=f_value, count_ones=count_ones)
+
+
+def lowdim_any_row(f_value, any_token):
+    return lookup_one(LOWDIM_ANY_ROWS, true_f=f_value, any_token=any_token)
+
+
+def lowdim_pattern_row(f_value, count_ones):
+    return lookup_one(LOWDIM_PATTERN_ROWS, true_f=f_value, count_ones=count_ones)
+
+
+def lowdim_surrogate_row(f_value, model_name):
+    return lookup_one(LOWDIM_SURROGATE_ROWS, true_f=f_value, model_name=model_name)
+
+
+def any_token_delta(f_value):
+    return float(lowdim_any_row(f_value, "1")["mean_p_cooperate"]) - float(
+        lowdim_any_row(f_value, "0")["mean_p_cooperate"]
+    )
+
+
+def pattern_max_gap_pp(f_value):
+    return max(float(row["median_gap_pp"]) for row in LOWDIM_PATTERN_ROWS if row["true_f"] == f_value)
+
+
+# --- Training drift data ---
+DRIFT_ROWS = load_csv(
+    EVAL_ROOT / "phase3_vecstraight_training_drift_15seeds_iwr_20260325" / "training_drift_summary.csv"
+)
+DRIFT_LOOKUP = {(row["condition"], row["scope"], row["episode"]): row for row in DRIFT_ROWS}
+
+
+def drift_value(condition, scope, episode, field):
+    return float(DRIFT_LOOKUP[(condition, scope, episode)][field])
+
+
+# --- Continuation data (for appendix) ---
+CONT_SUMMARY_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_paper_pivot_20260329_status"
+    / "sameckpt_continuations"
+    / "sameckpt_continuation_summary.csv"
+)
+CONT_PAIRED_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_paper_pivot_20260329_status"
+    / "sameckpt_continuations"
+    / "sameckpt_continuation_paired_stats.csv"
+)
+CONT_SUMMARY_LOOKUP = {
+    (row["mode"], row["checkpoint_episode"], row["f_value"]): row for row in CONT_SUMMARY_ROWS
+}
+CONT_PAIRED_LOOKUP = {
+    (row["mode"], row["checkpoint_episode"], row["f_value"]): row for row in CONT_PAIRED_ROWS
+}
+
+
+def cont_summary_value(mode, checkpoint_episode, f_value, field):
+    return float(CONT_SUMMARY_LOOKUP[(mode, checkpoint_episode, f_value)][field])
+
+
+def cont_paired_value(mode, checkpoint_episode, f_value, field):
+    return float(CONT_PAIRED_LOOKUP[(mode, checkpoint_episode, f_value)][field])
+
+
+# --- Exogenous controls data (for appendix, provisional) ---
+EXOG_SUMMARY_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_exogenous_channel_controls_status_20260330"
+    / "report"
+    / "channel_control_summary.csv"
+)
+EXOG_SUMMARY_LOOKUP = {
+    (row["mode"], row["checkpoint_episode"], row["f_value"]): row for row in EXOG_SUMMARY_ROWS
+}
+
+
+def exog_value(mode, checkpoint_episode, f_value, field):
+    return float(EXOG_SUMMARY_LOOKUP[(mode, checkpoint_episode, f_value)][field])
+
+
+def exog_delta(mode, reference_mode, f_value, field="mean_coop_rate", checkpoint_episode="150000"):
+    return exog_value(mode, checkpoint_episode, f_value, field) - exog_value(
+        reference_mode, checkpoint_episode, f_value, field
+    )
+
+
+# --- History data (for appendix) ---
+HISTORY_ROWS = []
+for csv_path in sorted(
+    (
+        EVAL_ROOT / "phase3_vecstraight_message_history_grid_150000_15seeds_local_20260327" / "report"
+    ).glob("*/history_audit_summary.csv")
+):
+    HISTORY_ROWS.extend(load_csv(csv_path))
+HISTORY_LOOKUP = {
+    (row["ablation"], row["history_intervention"], row["f_value"]): row for row in HISTORY_ROWS
+}
+HISTORY_ABLATIONS = sorted({row["ablation"] for row in HISTORY_ROWS})
+
+
+def history_mean(ablation, history_intervention, f_value):
+    return float(HISTORY_LOOKUP[(ablation, history_intervention, f_value)]["mean_coop_rate"])
+
+
+def history_delta(ablation, history_intervention, f_value):
+    return history_mean(ablation, history_intervention, f_value) - history_mean(
+        ablation, "none", f_value
+    )
+
+
+def history_average_delta(history_intervention, f_value):
+    return sum(history_delta(ablation, history_intervention, f_value) for ablation in HISTORY_ABLATIONS) / len(
+        HISTORY_ABLATIONS
+    )
+
+
+# --- Aggregate-cancellation and polarity-alignment data (for appendix) ---
+SEMANTICS_SUITE_ROOTS = {
+    "50000": EVAL_ROOT / "phase3_vecstraight_frozen50k_expanded_15seeds_local_20260327" / "suite",
+    "150000": EVAL_ROOT / "phase3_vecstraight_frozen150k_expanded_15seeds_local_20260327" / "suite",
+}
+
+
+def filtered_semantics_rows(rows):
+    return [
+        row
+        for row in rows
+        if row.get("condition") == "cond1"
+        and row.get("eval_policy") == "greedy"
+        and row.get("ablation", "none") == "none"
+        and row.get("history_intervention", "none") == "none"
+        and row.get("sender_remap", "none") == "none"
+        and row.get("cross_play", "none") == "none"
+    ]
+
+
+def sign_with_eps(value, eps=1e-8):
+    if value > eps:
+        return 1
+    if value < -eps:
+        return -1
+    return 0
+
+
+def pairwise_alignment(signs):
+    if len(signs) < 2:
+        return 0.0
+    scores = []
+    for idx in range(len(signs)):
+        for jdx in range(idx + 1, len(signs)):
+            scores.append(float(signs[idx] * signs[jdx]))
+    return sum(scores) / len(scores)
+
+
+def summarize_semantics_checkpoint(checkpoint_episode, receiver_rows, sender_rows):
+    seeds = sorted({row["train_seed"] for row in receiver_rows})
+    fhat_bins = sorted(
+        {row["fhat_bin"] for row in receiver_rows if row.get("summary") == "p_coop_given_any_token_fhat"}
+    )
+    sender_ids = sorted({row["sender_id"] for row in sender_rows if row.get("summary") == "p_msg1_given_fhat"})
+    receiver_ids = sorted(
+        {row["receiver_id"] for row in receiver_rows if row.get("summary") == "p_coop_given_sender_token_fhat"}
+    )
+    sender_ids_receiver = sorted(
+        {row["sender_id"] for row in receiver_rows if row.get("summary") == "p_coop_given_sender_token_fhat"}
+    )
+
+    any_token_lookup = {}
+    sender_token_lookup = {}
+    for row in receiver_rows:
+        if row.get("summary") == "p_coop_given_any_token_fhat":
+            any_token_lookup[(row["train_seed"], row["fhat_bin"], row["any_token"])] = float(
+                row["p_cooperate"]
+            )
+        elif row.get("summary") == "p_coop_given_sender_token_fhat":
+            sender_token_lookup[
+                (
+                    row["train_seed"],
+                    row["receiver_id"],
+                    row["sender_id"],
+                    row["fhat_bin"],
+                    row["sender_token"],
+                )
+            ] = float(row["p_cooperate"])
+
+    sender_regime_lookup = {}
+    for row in sender_rows:
+        if row.get("summary") == "p_msg1_given_fhat":
+            sender_regime_lookup[(row["train_seed"], row["sender_id"], row["fhat_bin"])] = float(
+                row["p_message_1"]
+            )
+
+    seed_rows = []
+    polarity_rows = []
+    for seed in seeds:
+        aggregate_deltas = []
+        for fhat_bin in fhat_bins:
+            p0 = any_token_lookup.get((seed, fhat_bin, "0"), 0.0)
+            p1 = any_token_lookup.get((seed, fhat_bin, "1"), 0.0)
+            aggregate_deltas.append(p1 - p0)
+
+        sender_deltas = []
+        for receiver_id in receiver_ids:
+            for sender_id in sender_ids_receiver:
+                if receiver_id == sender_id:
+                    continue
+                for fhat_bin in fhat_bins:
+                    p0 = sender_token_lookup.get((seed, receiver_id, sender_id, fhat_bin, "0"), 0.0)
+                    p1 = sender_token_lookup.get((seed, receiver_id, sender_id, fhat_bin, "1"), 0.0)
+                    sender_deltas.append(p1 - p0)
+
+        regime_deltas = []
+        for sender_id in sender_ids:
+            delta_high_minus_low = sender_regime_lookup.get((seed, sender_id, "fhat>=4.5"), 0.0) - sender_regime_lookup.get(
+                (seed, sender_id, "fhat<1.5"), 0.0
+            )
+            polarity_rows.append(
+                {
+                    "checkpoint_episode": checkpoint_episode,
+                    "train_seed": seed,
+                    "sender_id": sender_id,
+                    "delta_high_minus_low_fhat": delta_high_minus_low,
+                }
+            )
+            regime_deltas.append(delta_high_minus_low)
+
+        regime_signs = [sign_with_eps(value) for value in regime_deltas]
+        seed_rows.append(
+            {
+                "checkpoint_episode": checkpoint_episode,
+                "train_seed": seed,
+                "aggregate_signed_mean": sum(aggregate_deltas) / len(aggregate_deltas),
+                "aggregate_abs_mean": sum(abs(value) for value in aggregate_deltas) / len(aggregate_deltas),
+                "per_sender_abs_mean": sum(abs(value) for value in sender_deltas) / len(sender_deltas),
+                "alignment_regime_sign": pairwise_alignment(regime_signs),
+                "mean_abs_regime_delta": sum(abs(value) for value in regime_deltas) / len(regime_deltas),
+                "mixed_regime_signs": int(any(sign > 0 for sign in regime_signs) and any(sign < 0 for sign in regime_signs)),
+                "n_regime_positive": int(sum(1 for sign in regime_signs if sign > 0)),
+                "n_regime_negative": int(sum(1 for sign in regime_signs if sign < 0)),
+            }
+        )
+
+    aggregate_signed_mean, aggregate_signed_sem = mean_and_sem(
+        [row["aggregate_signed_mean"] for row in seed_rows]
+    )
+    aggregate_abs_mean, aggregate_abs_sem = mean_and_sem([row["aggregate_abs_mean"] for row in seed_rows])
+    per_sender_abs_mean, per_sender_abs_sem = mean_and_sem([row["per_sender_abs_mean"] for row in seed_rows])
+    alignment_regime_mean, alignment_regime_sem = mean_and_sem(
+        [row["alignment_regime_sign"] for row in seed_rows]
+    )
+    mean_abs_regime_delta, mean_abs_regime_delta_sem = mean_and_sem(
+        [row["mean_abs_regime_delta"] for row in seed_rows]
+    )
+    mean_pos_senders, _ = mean_and_sem([row["n_regime_positive"] for row in seed_rows])
+    mean_neg_senders, _ = mean_and_sem([row["n_regime_negative"] for row in seed_rows])
+
+    return (
+        {
+            "checkpoint_episode": checkpoint_episode,
+            "n_seeds": int(len(seed_rows)),
+            "aggregate_signed_mean": aggregate_signed_mean,
+            "aggregate_signed_sem": aggregate_signed_sem,
+            "aggregate_abs_mean": aggregate_abs_mean,
+            "aggregate_abs_sem": aggregate_abs_sem,
+            "per_sender_abs_mean": per_sender_abs_mean,
+            "per_sender_abs_sem": per_sender_abs_sem,
+            "aggregate_vs_sender_ratio": per_sender_abs_mean / max(aggregate_abs_mean, 1e-12),
+            "alignment_regime_mean": alignment_regime_mean,
+            "alignment_regime_sem": alignment_regime_sem,
+            "mean_abs_regime_delta": mean_abs_regime_delta,
+            "mean_abs_regime_delta_sem": mean_abs_regime_delta_sem,
+            "mixed_regime_seed_count": int(sum(row["mixed_regime_signs"] for row in seed_rows)),
+            "mean_pos_senders": mean_pos_senders,
+            "mean_neg_senders": mean_neg_senders,
+        },
+        seed_rows,
+        polarity_rows,
+    )
+
+
+SEMANTICS_DIAGNOSTIC_ROWS = []
+SEMANTICS_SEED_ROWS = []
+SEMANTICS_POLARITY_ROWS = []
+for checkpoint_episode, suite_root in SEMANTICS_SUITE_ROOTS.items():
+    summary_row, seed_rows, polarity_rows = summarize_semantics_checkpoint(
+        checkpoint_episode,
+        receiver_rows=filtered_semantics_rows(load_csv(suite_root / "checkpoint_suite_receiver_semantics.csv")),
+        sender_rows=filtered_semantics_rows(load_csv(suite_root / "checkpoint_suite_sender_semantics.csv")),
+    )
+    SEMANTICS_DIAGNOSTIC_ROWS.append(summary_row)
+    SEMANTICS_SEED_ROWS.extend(seed_rows)
+    SEMANTICS_POLARITY_ROWS.extend(polarity_rows)
+
+SEMANTICS_DIAGNOSTIC_LOOKUP = {row["checkpoint_episode"]: row for row in SEMANTICS_DIAGNOSTIC_ROWS}
+
+
+def semantics_diagnostic(checkpoint_episode):
+    return SEMANTICS_DIAGNOSTIC_LOOKUP[str(checkpoint_episode)]
+
+
+def semantics_value(checkpoint_episode, field):
+    return semantics_diagnostic(checkpoint_episode)[field]
+
+
+# --- Table renderers ---
+
+def render_base_gap_table():
+    lines = [
+        r"\begin{table}[t]",
+        r"  \caption{Cooperation rates $P(C \mid f_t=f)$ for separately trained communication and no-communication conditions. Mean $\pm$ SEM over 15 seeds.}\label{tab:comm_gap}",
+        r"  \centering",
+        r"  \small",
+        r"  \begin{tabular}{llcccc}",
+        r"    \toprule",
+        r"    & & \multicolumn{4}{c}{Checkpoint (episodes)} \\",
+        r"    \cmidrule(lr){3-6}",
+        r"    $f$ regime & Condition & 25k & 50k & 100k & 150k \\",
+        r"    \midrule",
+    ]
+    for idx, f_value in enumerate(BASE_F_VALUES):
+        f_label = fmt_num(float(f_value), 1)
+        comm_cells = " & ".join(
+            math_text(
+                fmt_pct_pm(
+                    gap_value(f_value, checkpoint_episode, "new_cond1_mean"),
+                    gap_value(f_value, checkpoint_episode, "new_cond1_sem"),
+                )
+            )
+            for checkpoint_episode in BASE_CHECKPOINTS
+        )
+        nocomm_cells = " & ".join(
+            math_text(
+                fmt_pct_pm(
+                    gap_value(f_value, checkpoint_episode, "new_cond2_mean"),
+                    gap_value(f_value, checkpoint_episode, "new_cond2_sem"),
+                )
+            )
+            for checkpoint_episode in BASE_CHECKPOINTS
+        )
+        gap_cells = " & ".join(
+            math_text(fmt_pp(gap_value(f_value, checkpoint_episode, "new_gap")))
+            for checkpoint_episode in BASE_CHECKPOINTS
+        )
+        lines.extend(
+            [
+                fr"    \multirow{{3}}{{*}}{{$f={f_label}$}}",
+                fr"      & \texttt{{comm}} & {comm_cells} \\",
+                fr"      & \texttt{{no-comm}} & {nocomm_cells} \\",
+                fr"      & $\commgap$ & {gap_cells} \\",
+            ]
+        )
+        if idx != len(BASE_F_VALUES) - 1:
+            lines.append(r"    \midrule")
+    lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+    return "\n".join(lines)
+
+
+FROZEN_TABLE_MODES = [
+    ("none", tex_tt("none")),
+    ("sender_shuffle", tex_tt("sender_shuffle")),
+    ("permute_slots", tex_tt("permute_slots")),
+    ("public_random", tex_tt("public_random")),
+    ("public_marginal", tex_tt("public_marginal")),
+    ("indep_random", tex_tt("indep_random")),
+    ("marginal", tex_tt("marginal")),
+    ("fixed0", tex_tt("fixed0")),
+    ("zeros", tex_tt("zeros")),
+    ("fixed1", tex_tt("fixed1")),
+    ("baseline_none", tex_tt("no-comm baseline")),
+]
+
+
+def render_frozen_table():
+    def frozen_value_cell(checkpoint_episode, f_value, mode):
+        if not has_frozen_mode(checkpoint_episode, f_value, mode):
+            return "---"
+        return fmt_rate(frozen_mode_mean(checkpoint_episode, f_value, mode), 4)
+
+    def frozen_delta_cell(checkpoint_episode, f_value, mode):
+        if mode == "none" or not has_frozen_mode(checkpoint_episode, f_value, mode):
+            return "---"
+        return math_text(fmt_pp(frozen_delta_vs_natural(checkpoint_episode, f_value, mode)))
+
+    lines = [
+        r"\begin{table}[t]",
+        r"  \caption{Frozen-policy message-input sensitivity. Cooperation rates under message-stream perturbations at frozen 50k and 150k checkpoints. Delta columns report intervention minus natural stream.}\label{tab:frozen}",
+        r"  \centering",
+        r"  \small",
+        r"  \begin{tabular}{lcccccccc}",
+        r"    \toprule",
+        r"    & \multicolumn{4}{c}{50k checkpoint} & \multicolumn{4}{c}{150k checkpoint} \\",
+        r"    \cmidrule(lr){2-5} \cmidrule(lr){6-9}",
+        r"    Mode & $f=3.5$ & $\Delta$ & $f=5.0$ & $\Delta$ & $f=3.5$ & $\Delta$ & $f=5.0$ & $\Delta$ \\",
+        r"    \midrule",
+    ]
+    for mode, label in FROZEN_TABLE_MODES:
+        cells = []
+        for checkpoint_episode in ("50000", "150000"):
+            for f_value in BASE_F_VALUES:
+                cells.append(frozen_value_cell(checkpoint_episode, f_value, mode))
+                cells.append(frozen_delta_cell(checkpoint_episode, f_value, mode))
+        lines.append(f"    {label} & " + " & ".join(cells) + r" \\")
+    lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+    return "\n".join(lines)
+
+
+def render_sender_table():
+    lines = [
+        r"\begin{table}[t]",
+        r"  \caption{Single-slot intervention probes at 150k. Mean $|\Delta|$ is the average absolute shift in receiver cooperation probability when one sender's token is forced. Flip0 and Flip1 are action-flip rates under forced token~0 and~1.}\label{tab:sender_causal}",
+        r"  \centering",
+        r"  \small",
+        r"  \begin{tabular}{lcccc}",
+        r"    \toprule",
+        r"    $f$ & Mean Delta & Mean $|\Delta|$ & Flip0 & Flip1 \\",
+        r"    \midrule",
+    ]
+    for f_value in ["0.5", "1.5", "2.5", "3.5", "5.0"]:
+        row = sender_overall("overall_all", f_value)
+        lines.append(
+            "    "
+            + " & ".join(
+                [
+                    f_value,
+                    fmt_rate(row["mean_delta_p_cooperate"], 4),
+                    fmt_rate(row["mean_abs_delta_p_cooperate"], 4),
+                    fmt_rate(row["mean_flip_rate_force0"], 4),
+                    fmt_rate(row["mean_flip_rate_force1"], 4),
+                ]
+            )
+            + r" \\"
+        )
+    lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+    return "\n".join(lines)
+
+
+# --- Appendix table renderers ---
+
+def render_alignment_table():
+    def signed_pp_cell(checkpoint_episode, field_mean, field_sem):
+        return pp_pm_math(
+            semantics_value(checkpoint_episode, field_mean),
+            semantics_value(checkpoint_episode, field_sem),
+        )
+
+    def abs_pp_cell(checkpoint_episode, field_mean, field_sem):
+        return abs_pp_pm_math(
+            semantics_value(checkpoint_episode, field_mean),
+            semantics_value(checkpoint_episode, field_sem),
+        )
+
+    def plain_pm_cell(checkpoint_episode, field_mean, field_sem, places=2):
+        return math_text(
+            f"{fmt_num(semantics_value(checkpoint_episode, field_mean), places)} \\pm {fmt_num(semantics_value(checkpoint_episode, field_sem), places)}"
+        )
+
+    lines = [
+        r"\begin{table}[t]",
+        r"  \caption{Aggregate-cancellation and polarity-alignment diagnostics from natural frozen traces. Aggregate any-token effects average $P(C \mid \exists\, k: m_k=1,\fhat_{\mathrm{bin}}) - P(C \mid \forall\, k: m_k=0,\fhat_{\mathrm{bin}})$ over private-signal bins. Per-sender effects average $|P(C \mid m_i=1,\fhat_{\mathrm{bin}}) - P(C \mid m_i=0,\fhat_{\mathrm{bin}})|$ over non-self sender--receiver pairs and bins. Regime-sign alignment is the mean pairwise product of sender polarity signs, where polarity is $P(m_i=1 \mid \fhat \ge 4.5) - P(m_i=1 \mid \fhat < 1.5)$. Mean $\pm$ SEM over 15 seeds.}\label{tab:alignment}",
+        r"  \centering",
+        r"  \small",
+        r"  \begin{tabular}{lcc}",
+        r"    \toprule",
+        r"    Metric & 50k & 150k \\",
+        r"    \midrule",
+        r"    Aggregate signed effect & "
+        + signed_pp_cell("50000", "aggregate_signed_mean", "aggregate_signed_sem")
+        + r" & "
+        + signed_pp_cell("150000", "aggregate_signed_mean", "aggregate_signed_sem")
+        + r" \\",
+        r"    Aggregate mean $|\delta_{\mathrm{agg}}|$ & "
+        + abs_pp_cell("50000", "aggregate_abs_mean", "aggregate_abs_sem")
+        + r" & "
+        + abs_pp_cell("150000", "aggregate_abs_mean", "aggregate_abs_sem")
+        + r" \\",
+        r"    Per-sender mean $|\delta_{i \rightarrow j}|$ & "
+        + abs_pp_cell("50000", "per_sender_abs_mean", "per_sender_abs_sem")
+        + r" & "
+        + abs_pp_cell("150000", "per_sender_abs_mean", "per_sender_abs_sem")
+        + r" \\",
+        r"    Ratio ($|\delta_{i \rightarrow j}| / |\delta_{\mathrm{agg}}|$) & "
+        + math_text(f"{fmt_num(semantics_value('50000', 'aggregate_vs_sender_ratio'), 1)}\\times")
+        + r" & "
+        + math_text(f"{fmt_num(semantics_value('150000', 'aggregate_vs_sender_ratio'), 1)}\\times")
+        + r" \\",
+        r"    Regime-sign alignment & "
+        + plain_pm_cell("50000", "alignment_regime_mean", "alignment_regime_sem")
+        + r" & "
+        + plain_pm_cell("150000", "alignment_regime_mean", "alignment_regime_sem")
+        + r" \\",
+        r"    Mean $|\Delta_{\mathrm{high-low}}|$ & "
+        + abs_pp_cell("50000", "mean_abs_regime_delta", "mean_abs_regime_delta_sem")
+        + r" & "
+        + abs_pp_cell("150000", "mean_abs_regime_delta", "mean_abs_regime_delta_sem")
+        + r" \\",
+        r"    Mixed-polarity seeds & "
+        + f"{int(semantics_value('50000', 'mixed_regime_seed_count'))}/{int(semantics_value('50000', 'n_seeds'))}"
+        + r" & "
+        + f"{int(semantics_value('150000', 'mixed_regime_seed_count'))}/{int(semantics_value('150000', 'n_seeds'))}"
+        + r" \\",
+        r"    \bottomrule",
+        r"  \end{tabular}",
+        r"\end{table}",
+    ]
+    return "\n".join(lines)
+
+
+def render_continuation_table():
+    branch_rows = [
+        ("Learned 150k reference", cont_summary_value("learned", "150000", "3.500", "mean_coop_rate"), cont_summary_value("learned", "150000", "3.500", "sem_coop_rate"), cont_summary_value("learned", "150000", "5.000", "mean_coop_rate"), cont_summary_value("learned", "150000", "5.000", "sem_coop_rate")),
+        (r"$50\text{k}\rightarrow150\text{k}$ " + tex_tt("sender_shuffle"), cont_summary_value("sender_shuffle_50k", "150000", "3.500", "mean_coop_rate"), cont_summary_value("sender_shuffle_50k", "150000", "3.500", "sem_coop_rate"), cont_summary_value("sender_shuffle_50k", "150000", "5.000", "mean_coop_rate"), cont_summary_value("sender_shuffle_50k", "150000", "5.000", "sem_coop_rate")),
+        (r"$50\text{k}\rightarrow150\text{k}$ " + tex_tt("fixed0"), cont_summary_value("fixed0_50k", "150000", "3.500", "mean_coop_rate"), cont_summary_value("fixed0_50k", "150000", "3.500", "sem_coop_rate"), cont_summary_value("fixed0_50k", "150000", "5.000", "mean_coop_rate"), cont_summary_value("fixed0_50k", "150000", "5.000", "sem_coop_rate")),
+        (r"$50\text{k}\rightarrow150\text{k}$ " + tex_tt("public_random"), cont_summary_value("public_random_50k", "150000", "3.500", "mean_coop_rate"), cont_summary_value("public_random_50k", "150000", "3.500", "sem_coop_rate"), cont_summary_value("public_random_50k", "150000", "5.000", "mean_coop_rate"), cont_summary_value("public_random_50k", "150000", "5.000", "sem_coop_rate")),
+        (r"$100\text{k}\rightarrow150\text{k}$ " + tex_tt("sender_shuffle"), cont_summary_value("sender_shuffle_100k", "150000", "3.500", "mean_coop_rate"), cont_summary_value("sender_shuffle_100k", "150000", "3.500", "sem_coop_rate"), cont_summary_value("sender_shuffle_100k", "150000", "5.000", "mean_coop_rate"), cont_summary_value("sender_shuffle_100k", "150000", "5.000", "sem_coop_rate")),
+        (r"$100\text{k}\rightarrow150\text{k}$ " + tex_tt("fixed0"), cont_summary_value("fixed0_100k", "150000", "3.500", "mean_coop_rate"), cont_summary_value("fixed0_100k", "150000", "3.500", "sem_coop_rate"), cont_summary_value("fixed0_100k", "150000", "5.000", "mean_coop_rate"), cont_summary_value("fixed0_100k", "150000", "5.000", "sem_coop_rate")),
+        (r"$50\text{k}\rightarrow150\text{k}$ " + tex_tt("uniform"), cont_summary_value("uniform_50k", "150000", "3.500", "mean_coop_rate"), cont_summary_value("uniform_50k", "150000", "3.500", "sem_coop_rate"), cont_summary_value("uniform_50k", "150000", "5.000", "mean_coop_rate"), cont_summary_value("uniform_50k", "150000", "5.000", "sem_coop_rate")),
+        ("No-comm 150k baseline", gap_value("3.500", "150000", "new_cond2_mean"), gap_value("3.500", "150000", "new_cond2_sem"), gap_value("5.000", "150000", "new_cond2_mean"), gap_value("5.000", "150000", "new_cond2_sem")),
+    ]
+    lines = [
+        r"\begin{table}[t]",
+        r"  \caption{Same-checkpoint continuation results. Natural endpoint evaluation at 150k under no message intervention, reported as mean $\pm$ SEM over 15 seeds. Note: continuation branches used zeroed auxiliary communication losses, so comparisons against the learned reference (which used nonzero auxiliary losses) should be read as sensitivity to channel structure rather than as clean pairwise contrasts.}\label{tab:continuation}",
+        r"  \centering",
+        r"  \small",
+        r"  \begin{tabular}{lcc}",
+        r"    \toprule",
+        r"    Branch & Eval at $f=3.5$ & Eval at $f=5.0$ \\",
+        r"    \midrule",
+    ]
+    for label, mean35, sem35, mean50, sem50 in branch_rows:
+        lines.append(
+            f"    {label} & {math_text(fmt_pct_pm(mean35, sem35))} & {math_text(fmt_pct_pm(mean50, sem50))} \\\\"
+        )
+    lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+    return "\n".join(lines)
+```
+
+# Introduction {#sec-intro}
+
+Multi-agent reinforcement learning (MARL) has produced a growing literature on emergent communication, in which agents learn to use a discrete signaling channel to coordinate behavior [@foerster2016learning; @sukhbaatar2016learning; @lazaridou2017multi; @havrylov2017emergence; @mordatch2018emergence]. A central question is whether agents develop meaningful, shared protocols or merely learn policies that happen to correlate with message-sending behavior [@kottur2017natural; @cao2018emergent; @lowe2019pitfalls]. Standard evaluation focuses on endpoint metrics: cooperation rates at the final checkpoint, mutual information between messages and task variables, and topographic similarity. For a comprehensive survey, see @lazaridou2020emergent.
+
+This attribution problem is especially acute under independent learning, where non-stationarity makes it difficult to separate message semantics from broader training dynamics [@papoudakis2019dealing; @oroojlooyjadid2022review]. Yet a parallel literature on coordination devices suggests that even meaningless exogenous signals can aid cooperation by serving as shared correlation anchors [@aumann1974subjectivity; @duffy2017sunspots]. This raises a sharper question than whether communication "works": when agents benefit from a message channel, how much of that benefit requires a portable learned code, and how much comes from the mere presence of stable, variable signal input?
+
+We study this question in a four-agent extended public goods game (EPGG) with hidden regime switching, noisy private observations, and optional binary communication [@orzan2024pgg]. The environment is useful because the severity of the social dilemma changes over time without direct notification, making communication potentially valuable but not equally so in every regime. We organize the paper around three empirical questions:
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{Channel benefit:} does having a communication channel help relative to a matched no-communication training path?
+  \item \textbf{Endpoint structure:} how much of the frozen-policy message dependence survives coarse replacements such as shuffled, random, constant, or token-rate-matched channels?
+  \item \textbf{Mechanism portability:} is the residual message dependence a portable shared code, or a mixture of coarse summaries and seed-specific private conventions?
+\end{enumerate}
+```
+
+Our main findings are:
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{Positive late communication gap at both focal regimes.} By 150k episodes, communication-trained agents cooperate substantially more than no-communication agents at both the mixed-motive and cooperation-dominant multipliers.
+  \item \textbf{Real but non-unique endpoint channel use.} Frozen-policy perturbations, token-rate-matched controls, and single-slot sender probes show that the endpoint policy uses the channel, but the natural stream is not uniquely optimal---several shuffled or random replacements perform comparably.
+  \item \textbf{Three forms of message dependence.} Low-dimensional analyses show that (a)~stable variable signal input provides the dominant cross-seed benefit, (b)~coarse shared summaries add smaller regime-dependent value, and (c)~rich sender-indexed conventions are behaviorally large within a seed but do not generalize across independently trained populations.
+\end{enumerate}
+```
+
+We focus on the base training comparison, frozen-policy interventions, single-slot sender probes, and low-dimensional mechanism analysis. Supplementary appendices report additional evaluation-time controls including observation-noise sweeps, message--history interaction grids, same-checkpoint continuation experiments, and preliminary from-scratch exogenous-channel training results.
+
+# Setup {#sec-setup}
+
+## Extended public goods game with regime switching
+
+We study a four-agent ($N=4$) Extended Public Goods Game (EPGG) played over $T=100$ rounds per episode. Each round $t$, agent $i$ observes a noisy private signal $\fhat_{i,t} = f_t + \varepsilon_{i,t}$, where $\varepsilon_{i,t} \sim \mathcal{N}(0, \sigma^2)$ with $\sigma = 0.5$, and chooses whether to cooperate ($a_i = C$) or defect ($a_i = D$). Each agent holds an endowment of $c=4$ units. A cooperator contributes $c$ to a shared pool; a defector keeps $c$ as private payoff. Contributions are multiplied by the current regime factor $f_t$ and split equally, so each agent's round payoff is
+$$
+u_i = \frac{f_t}{N} \sum_{j=1}^{N} c \cdot \mathbf{1}[a_j = C] \;+\; c \cdot \mathbf{1}[a_i = D].
+$$
+
+The hidden multiplier $f_t$ takes values in $\mathcal{F} = \{0.5, 1.5, 2.5, 3.5, 5.0\}$ and switches with probability $\rho = 0.05$ per round. Each agent's action is also subject to tremble noise with probability $\varepsilon_{\text{tremble}} = 0.05$.
+
+When $f < N = 4$, defection is the dominant strategy; when $f > N$, cooperation dominates regardless of others' actions. The mixed-motive regime ($f=3.5$) is the theoretically central case because cooperation is collectively beneficial but still individually costly. The cooperation-dominant regime ($f=5.0$) serves as a contrast where cooperation is individually rational. These two multipliers are the main manuscript targets.
+
+## Communication condition
+
+In the communication condition (\texttt{comm}), agents simultaneously broadcast a binary message $m_i \in \{0,1\}$ before choosing actions. All agents observe the sender-indexed message vector. Messages have no preassigned meaning. In the no-communication condition (\texttt{no-comm}), no messages are exchanged.
+
+## Training
+
+We train agents with independent PPO [@schulman2017proximal] and generalized advantage estimation [@schulman2016high], using feed-forward policies, a trainer-side observation wrapper with lagged social summaries, noisy private regime observations, and entropy annealing over training. All results use 15 independent training seeds with checkpoints at 25k, 50k, 100k, and 150k episodes.
+
+## Evaluation design
+
+We draw on four main experiment families and five supplementary families:
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \textbf{Base checkpoint suites} for \texttt{comm} and \texttt{no-comm}, used to estimate the descriptive communication gap across training.
+  \item \textbf{Frozen-policy intervention suites} at 50k and 150k, where all weights are frozen and the message stream is perturbed at evaluation time.
+  \item \textbf{Single-slot sender probes} at 150k, forcing one sender's token while holding all else fixed.
+  \item \textbf{Low-dimensional mechanism analyses} at 150k, using natural frozen traces to compare count, sender-pattern, and surrogate-model explanations.
+\end{enumerate}
+```
+
+Supplementary analyses include aggregate-cancellation and polarity-alignment diagnostics, observation-noise sweeps, message--history interaction grids, same-checkpoint continuation controls, and preliminary from-scratch exogenous-channel training results (Appendices~\ref{app:alignment}--\ref{app:exogenous}). Unless otherwise noted, reported values are greedy evaluation means over 15 training seeds.
+
+These families answer different questions. The base communication gap and the natural semantics summaries are descriptive: they characterize the structure that appears under the policy-induced rollout distribution, but they do not by themselves identify what would happen if the message channel were forced to change. The frozen-policy interventions and single-slot sender probes are interventional endpoint analyses: they ask how a fixed policy responds when incoming messages are replaced or one sender's token is forced. Same-checkpoint continuation instead targets continued learning from a common initialization. We therefore use the observational analyses to describe structure and cancellation, and the interventional analyses to test whether the endpoint policy or the continuing training process actually depends on message content.
+
+# Results {#sec-results}
+
+## Descriptive communication gap {#sec-main-result}
+
+We begin with a descriptive comparison between separately trained communication and no-communication conditions. Because the two conditions use independent PPO with different training trajectories, the gap mixes message effects with broader optimization-path differences. We use it as scene-setting rather than as a clean causal estimate.
+
+```{python}
+#| echo: false
+#| output: asis
+print(render_base_gap_table())
+```
+
+```{python}
+#| label: fig-base-gap
+#| fig-cap: "Separately trained communication and no-communication conditions across checkpoints. Solid lines show greedy evaluation cooperation with SEM error bars over 15 seeds. The dashed line on the secondary axis shows the communication gap in percentage points."
+#| fig-pos: "t"
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+f_targets = [("3.500", r"$f = 3.5$"), ("5.000", r"$f = 5.0$")]
+checkpoints = [25, 50, 100, 150]
+
+fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.9), sharex=True)
+gap_axes = []
+
+for ax, (f_key, title) in zip(axes, f_targets):
+    subset = [r for r in GAP_ROWS if r["f_value"] == f_key]
+    subset = sorted(subset, key=lambda r: int(r["checkpoint_episode"]))
+
+    xs = [int(r["checkpoint_episode"]) / 1000 for r in subset]
+    comm = [100.0 * float(r["new_cond1_mean"]) for r in subset]
+    comm_sem = [100.0 * float(r["new_cond1_sem"]) for r in subset]
+    nocomm = [100.0 * float(r["new_cond2_mean"]) for r in subset]
+    nocomm_sem = [100.0 * float(r["new_cond2_sem"]) for r in subset]
+    gap = [100.0 * float(r["new_gap"]) for r in subset]
+
+    ax.errorbar(xs, comm, yerr=comm_sem, fmt="o-", color="#1b7f3b", lw=1.8, ms=4.5, capsize=3, label="comm")
+    ax.errorbar(xs, nocomm, yerr=nocomm_sem, fmt="s-", color="#4d4d4d", lw=1.8, ms=4.2, capsize=3, label="no-comm")
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks(checkpoints)
+    ax.set_xlabel("Checkpoint (k episodes)")
+    ax.set_ylim(25, 82)
+    ax.spines["top"].set_visible(False)
+
+    gap_ax = ax.twinx()
+    gap_ax.plot(xs, gap, "D--", color="#c23b22", lw=1.5, ms=4.0, label="gap")
+    gap_ax.axhline(0, color="#c23b22", lw=0.8, alpha=0.5)
+    gap_ax.set_ylim(-6, 22)
+    gap_ax.spines["top"].set_visible(False)
+    gap_axes.append(gap_ax)
+
+axes[0].set_ylabel("Cooperation (%)")
+gap_axes[-1].set_ylabel("Comm gap (pp)")
+
+for ax in axes:
+    ax.grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.6)
+
+handles = [
+    Line2D([0], [0], color="#1b7f3b", marker="o", lw=1.8, ms=4.5, label="comm"),
+    Line2D([0], [0], color="#4d4d4d", marker="s", lw=1.8, ms=4.2, label="no-comm"),
+    Line2D([0], [0], color="#c23b22", marker="D", lw=1.5, ls="--", ms=4.0, label="gap"),
+]
+fig.legend(handles=handles, frameon=False, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 1.08), fontsize=8)
+
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"The late communication gap is positive at both focal regimes. By 150k, communication-trained agents cooperate {pp_math(gap_value('3.500', '150000', 'new_gap'))} more than no-communication agents at $f=3.5$ and {pp_math(gap_value('5.000', '150000', 'new_gap'))} more at $f=5.0$. The gap widens over training at both multipliers, consistent with increasing message integration during learning. An important caveat is that this descriptive gap reflects both message-conditioned learning and broader differences between the two training paths."
+)
+```
+
+## Frozen-policy message-input sensitivity {#sec-frozen-endpoint}
+
+The frozen-policy interventions ask a narrower question: once all weights are fixed, how much does behavior change when the incoming message stream is perturbed? These interventions measure the online dependence of the frozen policy on its message input. They do not measure the full training-time value of the communication channel.
+
+Throughout this section, \texttt{none} means the natural learned message stream, not no communication.
+
+```{python}
+#| echo: false
+#| output: asis
+print(render_frozen_table())
+```
+
+```{python}
+#| label: fig-frozen-heatmap
+#| fig-cap: "Frozen-policy intervention heatmap. Each cell reports natural minus intervention cooperation rate in percentage points. Larger positive values indicate greater damage from the intervention."
+#| fig-pos: "t"
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.colors import TwoSlopeNorm
+
+frozen_row_order = [
+    "sender_shuffle", "permute_slots", "public_random", "public_marginal",
+    "indep_random", "marginal", "fixed0", "zeros", "fixed1", "baseline_none",
+]
+frozen_row_labels = [
+    "sender shuffle", "permute slots", "public random", "public marginal",
+    "indep random", "marginal", "fixed 0", "zeros", "fixed 1", "no-comm baseline",
+]
+frozen_col_specs = [
+    ("50000", "3.500", "50k\n$f=3.5$"),
+    ("50000", "5.000", "50k\n$f=5.0$"),
+    ("150000", "3.500", "150k\n$f=3.5$"),
+    ("150000", "5.000", "150k\n$f=5.0$"),
+]
+
+frozen_matrix = []
+for ablation in frozen_row_order:
+    row_vals = []
+    for checkpoint_episode, f_value, _ in frozen_col_specs:
+        if has_frozen_mode(checkpoint_episode, f_value, ablation):
+            row_vals.append(frozen_damage_vs_natural(checkpoint_episode, f_value, ablation) * 100.0)
+        else:
+            row_vals.append(float("nan"))
+    frozen_matrix.append(row_vals)
+
+frozen_abs_max = max(abs(v) for row in frozen_matrix for v in row if not math.isnan(v))
+frozen_bound = max(6.0, round(frozen_abs_max + 0.5))
+frozen_array = np.array(frozen_matrix, dtype=float)
+masked = np.ma.masked_invalid(frozen_array)
+
+fig, ax = plt.subplots(figsize=(6.8, 4.0))
+im = ax.imshow(
+    masked, cmap="RdBu_r",
+    norm=TwoSlopeNorm(vmin=-frozen_bound, vcenter=0.0, vmax=frozen_bound),
+    aspect="auto",
+)
+ax.set_xticks(range(len(frozen_col_specs)))
+ax.set_xticklabels([label for _, _, label in frozen_col_specs], fontsize=8)
+ax.set_yticks(range(len(frozen_row_labels)))
+ax.set_yticklabels(frozen_row_labels, fontsize=8)
+ax.set_xlabel("Checkpoint and focal multiplier")
+ax.set_ylabel("Intervention mode")
+ax.axvline(1.5, color="white", lw=1.8)
+
+for i, row in enumerate(frozen_matrix):
+    for j, value in enumerate(row):
+        label = "--" if math.isnan(value) else f"{value:+.1f}"
+        ax.text(j, i, label, ha="center", va="center", fontsize=7.2, color="black")
+
+cbar = fig.colorbar(im, ax=ax, shrink=0.88, pad=0.02)
+cbar.set_label("Natural minus intervention (pp)", fontsize=8)
+cbar.ax.tick_params(labelsize=7)
+
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"By 150k, the endpoint policy depends meaningfully on message input. Natural messages outperform the no-communication baseline by {pp_math(frozen_damage_vs_natural('150000', '3.500', 'baseline_none'))} at $f=3.5$ and {pp_math(frozen_damage_vs_natural('150000', '5.000', 'baseline_none'))} at $f=5.0$. This is large enough to reject the hypothesis that message inputs are simply ignored."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+tt_ss = tex_tt("sender_shuffle")
+tt_ps = tex_tt("permute_slots")
+tt_pm = tex_tt("public_marginal")
+tt_f1 = tex_tt("fixed1")
+tt_mg = tex_tt("marginal")
+d_ss = pp_math(frozen_damage_vs_natural('150000', '3.500', 'sender_shuffle'))
+d_ps = pp_math(frozen_damage_vs_natural('150000', '3.500', 'permute_slots'))
+d_pm = pp_math(frozen_damage_vs_natural('150000', '3.500', 'public_marginal'))
+d_f1 = pp_math(frozen_delta_vs_natural('150000', '5.000', 'fixed1'))
+print(
+    f"At the same time, the 150k intervention ranking does not support a uniquely privileged symbolic code. At $f=3.5$, the natural stream beats all tested replacements, but the gap over {tt_ss}, {tt_ps}, and the token-rate-matched {tt_pm} control is only {d_ss}, {d_ps}, and {d_pm} respectively. At $f=5.0$, the natural stream is only marginally better than {tt_ss} and is outperformed by {tt_f1} ({d_f1}). The token-rate-matched controls ({tt_mg} and {tt_pm}) do not rescue a clean-code interpretation: matching the learned frequency distribution helps only slightly over plain random replacement."
+)
+```
+
+The endpoint picture is therefore mixed. Natural messages are useful and usually competitive, but the learned stream is not uniquely optimal. The strongest current reading is that the load-bearing part of the channel involves stable variable signal input rather than fine-grained semantic content.
+
+## Single-slot sender probes at 150k {#sec-sender-probes}
+
+Frozen perturbations change the whole message field at once. Single-slot sender probes instead ask whether a single sender's token can shift what a receiver does while everything else is held fixed. For a frozen receiver policy and a fixed realized context, this is a well-defined $\text{do}(m_i = 0/1)$ intervention. The right interpretation is local input sensitivity of a frozen policy, not the full equilibrium effect of a sender "choosing" one message over another.
+
+```{python}
+#| echo: false
+#| output: asis
+print(render_sender_table())
+```
+
+```{python}
+#| label: fig-sender-matrix
+#| fig-cap: "Sender-to-receiver influence matrix at 150k. Each cell shows mean absolute change in receiver cooperation probability (pp) when a sender's token is forced. Diagonal cells are self-effects; off-diagonal cells are cross-agent effects."
+#| fig-pos: "t"
+from collections import defaultdict
+
+import matplotlib.pyplot as plt
+from matplotlib.patches import Rectangle
+
+sender_matrix_rows = load_csv(
+    EVAL_ROOT / "phase3_vecstraight_sender_causal_150k_15seeds_local_20260325" / "sender_causal_matrix.csv"
+)
+
+sender_ids = sorted(set(row["sender_id"] for row in sender_matrix_rows))
+receiver_ids = sorted(set(row["receiver_id"] for row in sender_matrix_rows))
+f_panels = [("3.5", r"$f = 3.5$"), ("5.0", r"$f = 5.0$")]
+
+pair_abs = defaultdict(list)
+for row in sender_matrix_rows:
+    key = (row["true_f"], row["sender_id"], row["receiver_id"])
+    pair_abs[key].append(abs(float(row["delta_p_cooperate_1_minus_0"])) * 100.0)
+
+sender_panels = []
+for f_value, _ in f_panels:
+    panel = []
+    for sender_id in sender_ids:
+        panel_row = []
+        for receiver_id in receiver_ids:
+            vals = pair_abs[(f_value, sender_id, receiver_id)]
+            panel_row.append(sum(vals) / len(vals))
+        panel.append(panel_row)
+    sender_panels.append(panel)
+
+sender_vmax = max(v for panel in sender_panels for row in panel for v in row)
+
+fig, axes = plt.subplots(1, 2, figsize=(6.6, 3.0), sharey=True)
+for ax, panel, (_, title) in zip(axes, sender_panels, f_panels):
+    im = ax.imshow(panel, cmap="YlOrRd", vmin=0.0, vmax=sender_vmax)
+    ax.set_title(title, fontsize=9)
+    ax.set_xticks(range(len(receiver_ids)))
+    ax.set_xticklabels([rid.replace("agent_", "A") for rid in receiver_ids], fontsize=8)
+    ax.set_yticks(range(len(sender_ids)))
+    ax.set_yticklabels([sid.replace("agent_", "A") for sid in sender_ids], fontsize=8)
+    ax.set_xlabel("Receiver")
+    for i in range(len(sender_ids)):
+        for j in range(len(receiver_ids)):
+            ax.text(j, i, f"{panel[i][j]:.1f}", ha="center", va="center", fontsize=7.5, color="black")
+        ax.add_patch(Rectangle((i - 0.5, i - 0.5), 1, 1, fill=False, edgecolor="black", linewidth=1.0))
+
+axes[0].set_ylabel("Sender")
+fig.subplots_adjust(right=0.88, wspace=0.25)
+cax = fig.add_axes([0.90, 0.18, 0.018, 0.66])
+cbar = fig.colorbar(im, cax=cax)
+cbar.set_label(r"Mean $|\Delta P(C)|$ (pp)", fontsize=8)
+cbar.ax.tick_params(labelsize=7)
+
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"The sender influence signal is essentially zero in the low-value regimes and large in the two focal regimes. At $f=3.5$, forcing a sender's token shifts receiver cooperation probability by about {pp_math(sender_overall('overall_all', '3.5')['mean_abs_delta_p_cooperate'])} on average, with action-flip rates around {pct_math(sender_overall('overall_all', '3.5')['mean_flip_rate_force0'])}--{pct_math(sender_overall('overall_all', '3.5')['mean_flip_rate_force1'])}. At $f=5.0$, the mean absolute effect rises to about {pp_math(sender_overall('overall_all', '5.0')['mean_abs_delta_p_cooperate'])}, with flip rates around {pct_math(sender_overall('overall_all', '5.0')['mean_flip_rate_force0'])}--{pct_math(sender_overall('overall_all', '5.0')['mean_flip_rate_force1'])}."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"The self/nonself split is also informative. Nonself effects are positive at $f=3.5$ and $f=5.0$ ({math_text(fmt_rate(sender_overall('overall_nonself', '3.5')['mean_delta_p_cooperate'], 4))} and {math_text(fmt_rate(sender_overall('overall_nonself', '5.0')['mean_delta_p_cooperate'], 4))}), whereas self-effects are slightly negative ({math_text(fmt_rate(sender_overall('overall_self', '3.5')['mean_delta_p_cooperate'], 4))} and {math_text(fmt_rate(sender_overall('overall_self', '5.0')['mean_delta_p_cooperate'], 4))}). The effects are also heterogeneous across sender--receiver pairs, consistent with an asymmetric influence network rather than a perfectly symmetric shared code."
+)
+```
+
+Appendix~\ref{app:alignment} shows the descriptive complement of this heterogeneity: once sender-conditioned endpoint effects are pooled into a single any-token summary, much of the structure cancels out rather than disappearing.
+
+## Low-dimensional message-response structure {#sec-lowdim}
+
+The frozen and sender-probe analyses show that messages matter, but they do not tell us whether receivers mainly react to coarse summaries or to richer sender-indexed patterns. We analyzed the natural 150k frozen traces using count-of-ones summaries, any-token indicators, within-count pattern heterogeneity, and grouped cross-seed surrogate models. These analyses are descriptive: count-response curves reflect associations under the policy-induced state distribution, not interventional effects of changing message content while holding history fixed.
+
+```{python}
+#| echo: false
+#| output: asis
+tt_at = tex_tt("any_token")
+print(
+    f"At $f=3.5$, count-of-ones is weak. Cooperation is nearly flat for counts $0$, $1$, and $2$ ({pct_math(lowdim_count_row('3.5', '0')['mean_p_cooperate'])}, {pct_math(lowdim_count_row('3.5', '1')['mean_p_cooperate'])}, and {pct_math(lowdim_count_row('3.5', '2')['mean_p_cooperate'])}), and rises only at $3$ ones ({pct_math(lowdim_count_row('3.5', '3')['mean_p_cooperate'])}). The coarse {tt_at} summary shifts cooperation by only {pp_math(any_token_delta('3.5'))}. At $f=5.0$, coarse message structure matters more but remains non-monotone: {tt_at} is worth {pp_math(any_token_delta('5.0'))}, count $3$ is highest ({pct_math(lowdim_count_row('5.0', '3')['mean_p_cooperate'])}), but count $2$ falls below count $1$ ({pct_math(lowdim_count_row('5.0', '2')['mean_p_cooperate'])} versus {pct_math(lowdim_count_row('5.0', '1')['mean_p_cooperate'])})."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"Within a trained seed, sender identity is behaviorally important. Holding the number of ones fixed, median within-seed cooperation gaps between the lowest and highest patterns reach {ppnum_math(pattern_max_gap_pp('3.5'))} at $f=3.5$ and {ppnum_math(pattern_max_gap_pp('5.0'))} at $f=5.0$. So within a given trained population, the policy is not merely reacting to a pooled count statistic."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+tt_ha = tex_tt("history_any")
+tt_ho = tex_tt("history_only")
+tt_hc = tex_tt("history_count")
+tt_hsb = tex_tt("history_sender_bits")
+tt_hp = tex_tt("history_pattern")
+ll_ha = math_text(fmt_rate(lowdim_surrogate_row('5.0', 'history_any')['mean_log_loss'], 4))
+ll_hc = math_text(fmt_rate(lowdim_surrogate_row('5.0', 'history_count')['mean_log_loss'], 4))
+ll_hp = math_text(fmt_rate(lowdim_surrogate_row('5.0', 'history_pattern')['mean_log_loss'], 4))
+ll_diff = math_text(fmt_num(float(lowdim_surrogate_row('5.0', 'history_pattern')['mean_log_loss']) - float(lowdim_surrogate_row('5.0', 'history_count')['mean_log_loss']), 3))
+print(
+    f"Across seeds, however, richer sender-indexed features do not generalize. Under grouped cross-validation by training seed, {tt_ha} and {tt_ho} match or beat {tt_hc}, whereas {tt_hsb} and especially {tt_hp} perform worse. At $f=5.0$, mean log loss is {ll_ha} for {tt_ha}, {ll_hc} for {tt_hc}, and {ll_hp} for full patterns---a deterioration of {ll_diff} in log loss when adding richer sender-pattern features."
+)
+```
+
+These results support a layered reading of endpoint message dependence. Having any variable signal input in the message slots provides a coordination anchor that transfers across seeds. Coarse shared summaries add modest regime-dependent value. Richer sender-specific conventions exist within each trained population and are behaviorally powerful, but they are idiosyncratic: different seeds develop different internal protocols that do not transfer. We therefore describe the endpoint structure as three \emph{forms of message dependence} rather than three additive layers of benefit.
+
+# Discussion {#sec-discussion}
+
+The results support three broad conclusions.
+
+First, the descriptive communication gap is positive and grows over training at both focal regimes. Communication-trained agents cooperate more than no-communication agents, and the advantage widens from 50k to 150k. Because the two conditions are separately trained, this gap reflects both message-conditioned learning and broader training-path differences. It serves as motivation for the more targeted analyses that follow.
+
+```{python}
+#| echo: false
+#| output: asis
+d_abs_35 = pp_math(sender_overall('overall_all', '3.5')['mean_abs_delta_p_cooperate'])
+d_abs_50 = pp_math(sender_overall('overall_all', '5.0')['mean_abs_delta_p_cooperate'])
+tt_pm2 = tex_tt("public_marginal")
+print(
+    f"Second, the endpoint channel is genuinely used but not uniquely privileged. Natural messages beat the no-communication baseline and most coarse replacements, and single-slot sender interventions produce mean absolute effects of about {d_abs_35} at $f=3.5$ and {d_abs_50} at $f=5.0$. At the same time, several shuffled or random replacements remain close to the natural stream, and a constant token of 1 slightly outperforms the learned protocol at $f=5.0$. The token-rate-matched {tt_pm2} control shows that matching the aggregate frequency distribution does not explain the residual benefit of learned messages."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+tt_at2 = tex_tt("any_token")
+d_at_35 = pp_math(any_token_delta('3.5'))
+d_at_50 = pp_math(any_token_delta('5.0'))
+print(
+    f"Third, the low-dimensional mechanism analysis decomposes endpoint message dependence into three forms. Across seeds, coarse summaries carry most of the stable benefit: at $f=3.5$, {tt_at2} moves cooperation by only {d_at_35}; at $f=5.0$, it helps more ({d_at_50}), but the count response is still non-monotone. Within a trained seed, richer sender-indexed patterns matter strongly, yet grouped cross-seed surrogate models perform worse when given richer sender-pattern features. The strongest current reading is therefore that \\emph{{stable variable signal input}} matters most, \\emph{{coarse shared structure}} adds smaller regime-dependent value, and the richest \\emph{{sender-specific conventions}} are seed-private rather than a portable shared code."
+)
+```
+
+Appendix~\ref{app:alignment} sharpens this point. By 150k, the aggregate observational any-token effect is only about {pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semantics_value('150000', 'aggregate_signed_sem'))}, while the corresponding per-sender absolute effect remains {abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))}. The aggregate can therefore look weak because sender-conditioned conventions cancel in the mean, not because sender-conditioned structure is absent.
+
+This three-part decomposition has an important implication. In the emergent communication literature, the standard evaluation target is whether agents develop a meaningful shared protocol [@lazaridou2017multi; @kottur2017natural; @lowe2019pitfalls]. Our results suggest that in this environment, the portable cross-seed benefit does not require a shared protocol. The dominant factor is the presence of stable variable input---what might be better understood as a correlation device [@aumann1974subjectivity; @duffy2017sunspots] than as learned cheap talk in the Crawford--Sobel sense [@crawford1982strategic]. Rich sender-specific conventions do emerge within each trained population, but they are private agreements rather than a generalizable language.
+
+\emph{The central claim is therefore: in this hidden-regime social dilemma under independent learning, portable learned semantics are not the dominant driver of the endpoint cooperation benefit. Stable variable signal input is.}
+
+## Limitations
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item The main-text results characterize endpoint message dependence via frozen-policy interventions, not the training-time value of communication. Preliminary from-scratch exogenous-channel training results (Appendix~\ref{app:exogenous}) suggest that variable stochastic channels can match or exceed learned communication, but those runs used a different auxiliary-loss configuration and are therefore not yet directly comparable to the base learned condition. Matched-loss reruns are in progress.
+  \item The convention non-portability claim rests on grouped cross-seed surrogate models rather than on direct behavioral cross-play tests. Cross-play experiments would provide a more direct test of whether conventions transfer across independently trained populations.
+  \item This is a single-game, four-agent, binary-vocabulary case study. Generalization to larger vocabularies, more agents, or different social dilemmas remains open.
+\end{enumerate}
+```
+
+# References
+
+\appendix
+
+# Appendix: Aggregate cancellation and polarity alignment {#app:alignment}
+
+The frozen sender-specific interventions in the main text are interventional endpoint tests. This appendix adds the descriptive complement: natural receiver- and sender-semantics summaries can look weak in the aggregate even when sender-conditioned structure remains strong.
+
+These summaries are observational, not interventional. They condition on message value or sender identity under the natural rollout distribution of the frozen policy; they therefore describe endpoint structure and convention fragmentation, but they do not by themselves identify what would happen under a forced message intervention.
+
+For the diagnostics below, we compare the aggregate any-token effect
+$$
+  \delta_{\mathrm{agg}}(\fhat_{\mathrm{bin}}) =
+  P(C \mid \exists\, k: m_k=1,\fhat_{\mathrm{bin}})
+  -
+  P(C \mid \forall\, k: m_k=0,\fhat_{\mathrm{bin}})
+$$
+to the sender-conditioned effect
+$$
+  \delta_{i \rightarrow j}(\fhat_{\mathrm{bin}}) =
+  P(C \mid m_i=1,\fhat_{\mathrm{bin}})
+  -
+  P(C \mid m_i=0,\fhat_{\mathrm{bin}}).
+$$
+For sender polarity, we summarize each sender's endpoint convention by
+$$
+  \Delta_{\mathrm{high-low}} =
+  P(m_i=1 \mid \fhat \ge 4.5) - P(m_i=1 \mid \fhat < 1.5),
+$$
+then ask whether different senders share the same sign or split into opposite polarities.
+
+```{python}
+#| echo: false
+#| output: asis
+print(render_alignment_table())
+```
+
+```{python}
+#| label: fig-alignment
+#| fig-cap: "Aggregate cancellation and polarity fragmentation in natural frozen traces. Left: per-seed aggregate mean $|\\delta_{\\mathrm{agg}}|$ and per-sender mean $|\\delta_{i \\rightarrow j}|$ at 50k and 150k. Right: per-seed regime-sign alignment index; $+1$ means all senders share one polarity, while values near $0$ indicate mixed sender signs."
+#| fig-pos: "t"
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+
+def jitter_positions(center, count, width=0.10):
+    if count <= 1:
+        return [center]
+    return [center - width + (2.0 * width * idx) / (count - 1) for idx in range(count)]
+
+
+fig, axes = plt.subplots(1, 2, figsize=(6.8, 2.9))
+checkpoint_specs = [("50000", "50k"), ("150000", "150k")]
+palette = {"agg": "#bdd7e7", "sender": "#2171b5", "align": "#c23b22"}
+
+for idx, (checkpoint_episode, label) in enumerate(checkpoint_specs):
+    seed_rows = sorted(
+        [row for row in SEMANTICS_SEED_ROWS if row["checkpoint_episode"] == checkpoint_episode],
+        key=lambda row: int(row["train_seed"]),
+    )
+
+    agg_center = idx - 0.16
+    sender_center = idx + 0.16
+    agg_seed_vals = [100.0 * float(row["aggregate_abs_mean"]) for row in seed_rows]
+    sender_seed_vals = [100.0 * float(row["per_sender_abs_mean"]) for row in seed_rows]
+
+    agg_mean = 100.0 * semantics_value(checkpoint_episode, "aggregate_abs_mean")
+    agg_sem = 100.0 * semantics_value(checkpoint_episode, "aggregate_abs_sem")
+    sender_mean = 100.0 * semantics_value(checkpoint_episode, "per_sender_abs_mean")
+    sender_sem = 100.0 * semantics_value(checkpoint_episode, "per_sender_abs_sem")
+
+    axes[0].bar(agg_center, agg_mean, width=0.24, color=palette["agg"], edgecolor="black", linewidth=0.6)
+    axes[0].bar(sender_center, sender_mean, width=0.24, color=palette["sender"], edgecolor="black", linewidth=0.6)
+    axes[0].errorbar([agg_center], [agg_mean], yerr=[agg_sem], fmt="none", ecolor="black", capsize=3, lw=1.0)
+    axes[0].errorbar([sender_center], [sender_mean], yerr=[sender_sem], fmt="none", ecolor="black", capsize=3, lw=1.0)
+    axes[0].scatter(
+        jitter_positions(agg_center, len(agg_seed_vals)),
+        agg_seed_vals,
+        s=16,
+        color="#6baed6",
+        alpha=0.8,
+        zorder=3,
+    )
+    axes[0].scatter(
+        jitter_positions(sender_center, len(sender_seed_vals)),
+        sender_seed_vals,
+        s=16,
+        color="#08519c",
+        alpha=0.8,
+        zorder=3,
+    )
+
+    align_seed_vals = [float(row["alignment_regime_sign"]) for row in seed_rows]
+    align_mean = semantics_value(checkpoint_episode, "alignment_regime_mean")
+    axes[1].scatter(
+        jitter_positions(idx, len(align_seed_vals), width=0.14),
+        align_seed_vals,
+        s=18,
+        color=palette["align"],
+        alpha=0.85,
+        zorder=3,
+    )
+    axes[1].hlines(align_mean, idx - 0.18, idx + 0.18, color="black", linewidth=1.6)
+
+axes[0].set_xticks(range(len(checkpoint_specs)))
+axes[0].set_xticklabels([label for _, label in checkpoint_specs], fontsize=8)
+axes[0].set_ylabel("Effect magnitude (pp)")
+axes[0].set_xlabel("Checkpoint")
+axes[0].spines["top"].set_visible(False)
+axes[0].spines["right"].set_visible(False)
+axes[0].grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.6)
+
+axes[1].axhline(0.0, color="black", linewidth=0.8, alpha=0.7)
+axes[1].set_xticks(range(len(checkpoint_specs)))
+axes[1].set_xticklabels([label for _, label in checkpoint_specs], fontsize=8)
+axes[1].set_ylim(-1.05, 1.05)
+axes[1].set_ylabel("Regime-sign alignment")
+axes[1].set_xlabel("Checkpoint")
+axes[1].spines["top"].set_visible(False)
+axes[1].spines["right"].set_visible(False)
+axes[1].grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.6)
+
+fig.legend(
+    handles=[
+        Line2D([0], [0], marker="s", color="w", markerfacecolor=palette["agg"], markeredgecolor="black", label=r"aggregate $|\delta_{\mathrm{agg}}|$"),
+        Line2D([0], [0], marker="s", color="w", markerfacecolor=palette["sender"], markeredgecolor="black", label=r"per-sender $|\delta_{i \rightarrow j}|$"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=palette["align"], label="alignment seed"),
+    ],
+    frameon=False,
+    loc="upper center",
+    ncol=3,
+    bbox_to_anchor=(0.5, 1.10),
+    fontsize=8,
+)
+
+plt.tight_layout()
+plt.show()
+```
+
+```{python}
+#| echo: false
+#| output: asis
+ratio_150 = math_text(f"{fmt_num(semantics_value('150000', 'aggregate_vs_sender_ratio'), 1)}\\times")
+print(
+    f"At 150k, the aggregate signed observational token effect is essentially zero: {pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semantics_value('150000', 'aggregate_signed_sem'))}. Yet the corresponding per-sender absolute effect remains {abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))}, about {ratio_150} larger than the aggregate absolute effect. This is aggregate cancellation: sender-conditioned endpoint effects survive, but many point in different directions and largely vanish when pooled."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"Sender polarity diagnostics show why the cancellation persists. The mean regime-sign alignment index is only {math_text(fmt_num(semantics_value('50000', 'alignment_regime_mean'), 2))} at 50k and {math_text(fmt_num(semantics_value('150000', 'alignment_regime_mean'), 2))} at 150k, while mixed-polarity seeds account for {int(semantics_value('50000', 'mixed_regime_seed_count'))}/15 and {int(semantics_value('150000', 'mixed_regime_seed_count'))}/15 seeds respectively. Even at 150k, the mean absolute sender polarity remains {abs_pp_pm_math(semantics_value('150000', 'mean_abs_regime_delta'), semantics_value('150000', 'mean_abs_regime_delta_sem'))}. Different senders within the same trained population therefore often disagree on what token 1 tends to signal, which is better described as sender-indexed dialects than as one shared sign convention."
+)
+```
+
+# Appendix: Observation-noise sweep {#app:noise}
+
+The noise sweep tests whether the communication advantage changes when private signal quality varies at evaluation time. Agents were trained at $\sigma = 0.5$; we evaluate at $\sigma \in \{0.0, 0.25, 0.5, 1.0\}$.
+
+```{python}
+#| echo: false
+#| output: asis
+# Load noise sweep data from the four sigma directories
+noise_results = {}
+for sigma_str, sigma_label in [("000", "0.0"), ("025", "0.25"), ("050", "0.5"), ("100", "1.0")]:
+    noise_dir = EVAL_ROOT / f"phase3_vecstraight_noise_sweep_sigma{sigma_str}_150000_15seeds_local_20260327" / "report" / "intervention_suite_summary.csv"
+    if noise_dir.exists():
+        noise_rows = load_csv(noise_dir)
+        for row in noise_rows:
+            key = (sigma_label, row["f_value"], row["ablation"], row["condition"])
+            noise_results[key] = float(row["mean_coop_rate"])
+
+lines = [
+    r"\begin{table}[h]",
+    r"  \caption{Observation-noise sweep at 150k. Cooperation rates under varying evaluation-time noise $\sigma$ for communication and no-communication conditions.}\label{tab:noise}",
+    r"  \centering",
+    r"  \small",
+    r"  \begin{tabular}{lcccc}",
+    r"    \toprule",
+    r"    & \multicolumn{4}{c}{Evaluation $\sigma$} \\",
+    r"    \cmidrule(lr){2-5}",
+    r"    Condition ($f=5.0$) & 0.0 & 0.25 & 0.5 & 1.0 \\",
+    r"    \midrule",
+]
+
+comm_cells = []
+nocomm_cells = []
+gap_cells = []
+for sigma_label in ["0.0", "0.25", "0.5", "1.0"]:
+    c = noise_results.get((sigma_label, "5.000", "none", "cond1"), float("nan"))
+    n = noise_results.get((sigma_label, "5.000", "baseline_none", "cond2"), float("nan"))
+    comm_cells.append(fmt_rate(c))
+    nocomm_cells.append(fmt_rate(n))
+    gap_cells.append(math_text(fmt_pp(c - n)) if not (math.isnan(c) or math.isnan(n)) else "---")
+
+lines.append(r"    \texttt{comm} & " + " & ".join(comm_cells) + r" \\")
+lines.append(r"    \texttt{no-comm} & " + " & ".join(nocomm_cells) + r" \\")
+lines.append(r"    Comm gap & " + " & ".join(gap_cells) + r" \\")
+lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+print("\n".join(lines))
+```
+
+At $f=5.0$, the communication advantage grows monotonically with evaluation-time noise, consistent with messages carrying genuine regime-relevant information: when private signals are less reliable, receivers benefit more from the message channel.
+
+# Appendix: Message--history interaction grid {#app:history}
+
+The message--history grid crosses 9 message conditions with 8 history-feature ablations at 150k, asking how cooperation changes when temporal observation features are zeroed or clamped.
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"At $f=5.0$ with learned messages, zeroing temporal history features \\emph{{increases}} cooperation: zeroing last action raises cooperation by about {pp_math(history_delta('none', 'zero_last_action', '5.000'))}, zeroing EWMA by {pp_math(history_delta('none', 'zero_ewma', '5.000'))}. Conversely, clamping temporal features high reduces cooperation by {pp_math(history_delta('none', 'clamp_temporal_high', '5.000'))}. At $f=3.5$, the pattern reverses: zeroing temporal features hurts cooperation by {pp_math(history_delta('none', 'zero_temporal', '3.500'))} on average."
+)
+```
+
+The interaction between message and history ablations shows that messages and temporal features are partial substitutes: when one information source is removed, agents lean harder on the other. Messages are most valuable when temporal information is distorted.
+
+# Appendix: Same-checkpoint continuation controls {#app:continuation}
+
+The continuation controls branch from a shared checkpoint and continue training with an altered message channel. Because every branch starts from a checkpoint trained with learned messages, alternative channels are evaluated under a prior policy that already "expects" learned-message statistics. Additionally, all continuation branches used zeroed auxiliary communication losses (\texttt{sign\_lambda}=0, \texttt{list\_lambda}=0), whereas the base learned condition used 0.1 for both. Comparisons against the learned reference should therefore be read as sensitivity to channel structure rather than as symmetric pairwise contrasts.
+
+```{python}
+#| echo: false
+#| output: asis
+print(render_continuation_table())
+```
+
+```{python}
+#| echo: false
+#| output: asis
+tt_f0 = tex_tt("fixed0")
+d_f0_50 = pp_math(cont_paired_value('fixed0_50k', '150000', '5.000', 'mean_delta_mode_minus_reference'))
+p_f0_50 = fmt_num(cont_paired_value('fixed0_50k', '150000', '5.000', 'sign_flip_p_value'), 4)
+print(
+    f"The continuation ladder shows that downstream learning remains sensitive to channel structure. Constant-zero channels ({tt_f0}) are consistently below the learned reference: from the 50k branch point, {d_f0_50} at $f=5.0$ (sign-flip $p={p_f0_50}$). Shuffled and uniform branches remain above the learned reference in the mean, though several comparisons do not reach conventional significance. The completed continuation picture is therefore heterogeneous: constant channels are harmful, but some exogenous variable channels can preserve or improve late cooperation."
+)
+```
+
+# Appendix: Preliminary from-scratch exogenous controls {#app:exogenous}
+
+From-scratch exogenous controls train with different channel types from episode 0 rather than branching from a learned checkpoint. These results are preliminary because the exogenous training path used a different auxiliary-loss configuration (\texttt{sign\_lambda}=0.0, \texttt{list\_lambda}=0.0) than the base learned condition (0.1 for both). The auxiliary losses---a message-entropy regularizer and a listening bonus---were designed to support communication learning; their absence in the exogenous conditions creates a training-objective confound that prevents clean comparison of channel types against the learned baseline.
+
+```{python}
+#| echo: false
+#| output: asis
+lines = [
+    r"\begin{table}[h]",
+    r"  \caption{Preliminary from-scratch exogenous controls at 150k (15 seeds). These results are not directly comparable to the learned baseline due to a training-objective confound (see text). Matched-loss reruns are in progress.}\label{tab:exogenous}",
+    r"  \centering",
+    r"  \small",
+    r"  \begin{tabular}{lcccc}",
+    r"    \toprule",
+    r"    Mode & $f=3.5$ & SEM & $f=5.0$ & SEM \\",
+    r"    \midrule",
+]
+for mode, label in [("learned", "learned"), ("uniform", "uniform"), ("public_random", "public\\_random"), ("fixed0", "fixed0"), ("fixed1", "fixed1"), ("no_comm", "no-comm")]:
+    lines.append(
+        f"    \\texttt{{{label}}} & "
+        + f"{fmt_pct(exog_value(mode, '150000', '3.500', 'mean_coop_rate'))} & "
+        + f"{fmt_pct(exog_value(mode, '150000', '3.500', 'sem_coop_rate'))} & "
+        + f"{fmt_pct(exog_value(mode, '150000', '5.000', 'mean_coop_rate'))} & "
+        + f"{fmt_pct(exog_value(mode, '150000', '5.000', 'sem_coop_rate'))}"
+        + r" \\"
+    )
+lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+print("\n".join(lines))
+```
+
+Despite the confound, the qualitative pattern is suggestive: variable stochastic channels (uniform, public\_random) cooperate more than constant channels (fixed0, fixed1), and constant channels can fall below the no-communication baseline. Whether uniform training genuinely outperforms learned communication under matched auxiliary-loss settings is the subject of ongoing matched-loss reruns.

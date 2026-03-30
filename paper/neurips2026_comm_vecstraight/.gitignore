@@ -1,0 +1,10 @@
+/.quarto/
+/_output/
+/tmp/
+/main.fdb_latexmk
+/main.fls
+/main.log
+/main.xdv
+/main.tex
+/main.html
+*.aux
