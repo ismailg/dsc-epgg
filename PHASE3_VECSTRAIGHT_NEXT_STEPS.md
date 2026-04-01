@@ -1,182 +1,108 @@
 # Phase-3 Vecstraight Next Steps
 
-This file exists so a new Codex chat or collaborator can resume the new phase-3 work without
-mixing it up with the older staged/warm-start paper family.
+This file is the short handoff note for the active vecstraight phase-3 work.
 
-Read this together with:
+It should answer three questions only:
 
-- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md)
-- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/DATA_MAP.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/DATA_MAP.md)
+1. What is the current scientific status?
+2. What is the current gating decision?
+3. Which file should I open next?
+
+For artifact locations, use [`DATA_MAP.md`](DATA_MAP.md).  
+For the active manuscript checklist, use [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md).  
+For the narrative interpretation, use [`PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md`](PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md).
 
 ## Scope
 
-This file is about the **new straight vectorized family** only:
+This file is about the newer straight vectorized family only:
 
 - `training_family = phase3_vecstraight`
 - repo = `dsc-epgg-vectorized`
 
-Do not use it to justify claims about the old `phase3_staged` manuscript family unless the
-analysis is explicitly cross-family.
+Do not use it to justify claims about the older staged/warm-start manuscript family unless the
+comparison is explicitly cross-family. For that split, read:
+
+- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md)
 
 ## Current Scientific Status
 
-The new straight vectorized 15-seed recheck produced:
+The main vecstraight fact that changes the older manuscript story is still:
 
-- `f=3.5, 150k`: `cond1-cond2 = +16.4 pp`
-- `f=5.0, 150k`: `cond1-cond2 = +18.8 pp`
+- `f=3.5, 150k`: `cond1 - cond2 = +16.4 pp`
+- `f=5.0, 150k`: `cond1 - cond2 = +18.8 pp`
 
-Relative to the old `phase3_staged` family:
+So, relative to the older `phase3_staged` family:
 
 - the late positive `f=3.5` communication gap survives
-- the late negative `f=5.0` communication gap does **not**
+- the late negative `f=5.0` reversal does not
 
-Therefore:
+That means older staged-family intervention and mechanism claims are not portable by default.
 
-- the old late `f=5.0` reversal is **not design-invariant**
-- old intervention/mechanism results must **not** be carried over automatically
+## Current Gating Decision
 
-## Local Data Status
+There is no active live training gate right now. The two March 30 repair families are complete and
+fetched locally:
 
-### Already local
+- qx6 loss-switch repair summary:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report)
+- Hetzner comm × history training summary:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_comm_history_factorial_status_20260401/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_comm_history_factorial_status_20260401/report)
 
-- `cond1` straight 15-seed training tree:
+Current takeaways:
+
+- the loss-switch repair shows a real objective-switch effect:
+  `none_zeroaux` falls below `none_base` at both focal multipliers, especially at `f=3.5`
+- under matched zero-aux training, `uniform_zeroaux` recovers that loss at `f=3.5` and exceeds
+  `none_base` at `f=5.0`, but the direct training-time learned-vs-uniform claim is still not fully
+  clean because the forced-channel implementation remains a sender/delivered-message hybrid
+- the comm × history factorial shows a strong history dependence:
+  communication has a clear endpoint advantage under full history, but that advantage nearly
+  vanishes under reduced history, and message responsiveness is much lower in the reduced-history
+  branch
+
+So the current gate is a decision, not a run:
+
+- if the next question is about exogenous training-time controls, the remaining issue is the hybrid
+  forced-message path rather than the auxiliary-loss mismatch alone
+- if the next question is about mechanism, the next high-value steps are the observability sweep and
+  the joint evaluation grid for the completed comm × history training family
+
+## Current Operational Cautions
+
+- Do not use `quadopt4` or `quadopt5` for vecstraight reruns. They failed immediately on March 27,
+  2026 with host-runtime incompatibilities.
+- Same-checkpoint continuation results should not be trusted until at least one saved `.run.json`
+  is checked against the parity contract in [`AGENTS.md`](AGENTS.md).
+- Use [`DATA_MAP.md`](DATA_MAP.md) as the path registry. This file deliberately avoids repeating
+  full artifact inventories.
+
+## Current Local Data Status
+
+The important train trees are already local:
+
+- `cond1` mirror:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond1-15seed-trainonly-20260323`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond1-15seed-trainonly-20260323)
-- `cond1` greedy checkpoint suite:
-  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_15seeds_local_20260324`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_15seeds_local_20260324)
-- fetched `cond2` eval suite:
-  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325)
-- local `cond2` aggregated suite/report root:
-  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325)
-- local straight-run comm-gap comparison:
-  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_comm_gap_15seeds_local_20260325`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_comm_gap_15seeds_local_20260325)
+- `cond2` mirror:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond2-15seed-trainonly-20260324`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond2-15seed-trainonly-20260324)
 
-### Not fully local yet
+That means new same-checkpoint manipulations do not need to treat the full `cond2` tree as
+remote-only.
 
-- the **full `cond2` training checkpoint tree** is still remote on IWR scratch:
-  `/export/scratch/iguennou/runs/dsc-epgg-vectorized/phase3-150k-cond2-15seed-trainonly-20260324`
+## File Ownership
 
-This matters because same-checkpoint continuation and other new-family manipulations need the
-actual `cond2` or `cond1` checkpoint trees, not just aggregated eval CSVs.
+Use the docs this way:
 
-## Preflight Before New Experimental Work
+- [`README.md`](README.md): repo entry point and active code map
+- [`DATA_MAP.md`](DATA_MAP.md): canonical local/remote artifact locations
+- [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md): active paper-facing checklist
+- [`PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md`](PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md): longer interpretation and result narrative
+- [`AGENTS.md`](AGENTS.md): stable operating rules, parity contract, and cluster policy
 
-Do these before starting the new intervention stack:
+## Minimal Handoff Prompt
 
-1. Fetch the full straight-run `cond2` training tree locally.
-2. Commit or otherwise cleanly snapshot the current state of this repo before starting a new
-   implementation pass.
-3. Keep all new outputs family-labeled with `phase3_vecstraight_*`.
-4. Start a fresh Codex session rooted in this repo for the implementation work.
+If starting a new Codex session in this repo, begin with:
 
-## Why A Fresh Codex Session In This Repo Is Preferred
-
-The current top-level chat has been spanning:
-
-- old manuscript work in `dsc-epgg`
-- new implementation and rechecks in `dsc-epgg-vectorized`
-- cluster launch/fetch bookkeeping
-
-For the next stage, the work is implementation-heavy and belongs in this repo. A fresh Codex
-session rooted at:
-
-- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized)
-
-will reduce confusion and make file-local reasoning cleaner.
-
-## Required Execution Order
-
-Follow this order. Do not skip ahead to expensive reruns.
-
-### Phase 1: parity infrastructure
-
-1. Port the richer evaluator surface from the old repo into this repo.
-2. Add the missing phase-3 orchestration runners in this repo.
-3. Add or port tests for the new evaluator/runners.
-
-This is necessary because the old repo currently has the full phase-3 manipulation stack, while the
-vectorized repo currently has only the base checkpoint suite runner.
-
-### Phase 2: frozen and causal analyses first
-
-Once the evaluation layer exists, run these first on existing checkpoints:
-
-1. `phase3_vecstraight_frozen50k_15seeds_*`
-2. `phase3_vecstraight_frozen150k_15seeds_*`
-3. `phase3_vecstraight_sender_causal_150k_15seeds_*`
-
-Reason:
-
-- these reuse existing checkpoints
-- they are much cheaper than retraining
-- they immediately test whether the old endpoint story survives in the new family
-
-### Phase 3: same-checkpoint continuations
-
-After the evaluation layer is stable, add the continuation-training layer and run:
-
-1. branch from `50k`:
-   - `fixed0`
-   - `uniform`
-   - `public_random`
-   - `sender_shuffle`
-2. branch from `100k`:
-   - at minimum `sender_shuffle`
-   - plus at least one basic control
-
-Reason:
-
-- the new family is small-gap at `50k` and large-gap at `100k/150k`
-- a `50k`-only same-checkpoint suite would miss the late timing story
-
-### Phase 4: history-feature audit
-
-Only after the above:
-
-1. run the history/EWMA audit on `150k`
-2. optionally run it at `100k` if the timing still needs disentangling
-
-Do not start with this. It is mechanistic and should come after the new-family endpoint and
-continuation facts are established.
-
-## Known Implementation Gap
-
-The vectorized trainer currently supports training-time message interventions:
-
-- `none`
-- `uniform`
-- `public_random`
-- `fixed0`
-- `fixed1`
-
-but does **not** currently expose `sender_shuffle` in the training path. This must be added before
-the full same-checkpoint continuation stack can be reproduced here.
-
-## Output Naming Rules
-
-Use these exact family labels in new output roots:
-
-- `phase3_vecstraight_frozen50k_...`
-- `phase3_vecstraight_frozen150k_...`
-- `phase3_vecstraight_sender_causal_...`
-- `phase3_vecstraight_sameckpt_continuation_50k_...`
-- `phase3_vecstraight_sameckpt_continuation_100k_...`
-- `phase3_compare_staged_vs_vecstraight_...`
-
-Do not create new roots like:
-
-- `phase3_sameckpt_*`
-- `phase3_frozen150k_*`
-- `phase3_sender_causal_*`
-
-without the family token.
-
-## Minimal Handoff Prompt For A New Chat
-
-If starting a new Codex session in this repo, begin with something like:
-
-> Read `PHASE3_VECSTRAIGHT_NEXT_STEPS.md`, `DATA_MAP.md`, and
-> `/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`.
-> Work only in `dsc-epgg-vectorized`. First fetch the full remote `cond2` training tree if still
-> missing locally. Then implement the phase-3 parity layer in this repo: evaluator interventions,
-> suite runners, and `sender_shuffle` training support. Only after that run new-family frozen and
-> sender-causal analyses, then same-checkpoint continuations.
+> Read `README.md`, `PHASE3_VECSTRAIGHT_NEXT_STEPS.md`, `DATA_MAP.md`, and
+> `PHASE3_VECSTRAIGHT_PAPER_TODO.md`. Work only in `dsc-epgg-vectorized`.
+> Treat `DATA_MAP.md` as the path registry, `PHASE3_VECSTRAIGHT_PAPER_TODO.md` as the active
+> checklist, and this file as the short status/handoff note.

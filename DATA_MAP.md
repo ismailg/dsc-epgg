@@ -1,73 +1,122 @@
 # Data Map
 
-This is the current human-readable map for the vectorized DSC-EPGG artifacts.
+This file is the canonical artifact map for the vectorized DSC-EPGG work in this repo.
 
-This repo now contains the newer straight vectorized phase-3 family. It is **not** interchangeable
-with the older staged/warm-start phase-3 family in
-[`/Users/mbp17/POSTDOC/NPS26/dsc-epgg`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg).
+It should answer two questions only:
 
-Read this first:
+1. Which result family is in scope here?
+2. Where do the authoritative local and remote artifacts live?
+
+For live interpretation and handoff context, use [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md).  
+For the active manuscript checklist, use [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md).
+
+## Family Scope
+
+This repo's active phase-3 family is:
+
+- `phase3_vecstraight`: uninterrupted `0 -> 150k` vectorized training with `num_envs=8`,
+  `count_env_episodes`, and the subprocess rollout backend
+
+Do not treat it as interchangeable with the older staged/warm-start family in the sibling repo:
 
 - [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md)
 
-## Current Phase-3 Family In This Repo
+## Canonical Local Roots
 
-The canonical phase-3 family here is:
+### Training trees
 
-- `phase3_vecstraight`:
-  uninterrupted `0->150k` vectorized training with `num_envs=8`, `count_env_episodes`, and the
-  subprocess rollout backend
-
-This family is currently a **candidate successor** to the older `phase3_staged` manuscript family.
-Do not reuse old staged-family intervention claims here unless that analysis has been rerun on this
-family.
-
-## Canonical Source Roots
-
-### Training roots
-
-- `cond1` fetched IWR checkpoints:
+- `cond1` 15-seed train tree:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond1-15seed-trainonly-20260323`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond1-15seed-trainonly-20260323)
-- standalone `cond1` seed-101 run:
+- `cond2` 15-seed train tree:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond2-15seed-trainonly-20260324`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-cond2-15seed-trainonly-20260324)
+- standalone `cond1` seed-101 train tree:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-straight-c1-s101-subproc-20260323`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3-150k-straight-c1-s101-subproc-20260323)
-- `cond2` train root currently remains on IWR scratch:
-  `/export/scratch/iguennou/runs/dsc-epgg-vectorized/phase3-150k-cond2-15seed-trainonly-20260324`
 
-### Main eval/report roots
+### Main local eval/report roots
 
 - `cond1` greedy checkpoint suite:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_15seeds_local_20260324`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_15seeds_local_20260324)
 - `cond2` greedy checkpoint suite:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325)
-- fetched remote copy of the `cond2` eval root:
-  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/phase3_vectorized_ext150k_cond2_15seeds_iwr_20260325)
-- exact `f=3.5` / `f=5.0` new comm-gap recheck:
+- late comm-gap recheck:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_comm_gap_15seeds_local_20260325`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_comm_gap_15seeds_local_20260325)
+- corrected continuation summary:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_paper_pivot_20260329_status/sameckpt_continuations`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_paper_pivot_20260329_status/sameckpt_continuations)
+- exogenous channel summary:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_exogenous_channel_controls_status_20260330/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_exogenous_channel_controls_status_20260330/report)
+- qx6 loss-switch repair summary:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report)
+- Hetzner comm × history training summary:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_comm_history_factorial_status_20260401/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_comm_history_factorial_status_20260401/report)
 
-## Scientific Contrast That Matters
+### Local fetched mirrors by family
 
-The main cross-family comparison is:
+Use these patterns when looking for fetched manipulation families:
 
-- old `phase3_staged` `cond1-cond2` gap at `150k`:
-  `f=3.5 +8.6 pp`, `f=5.0 -24.0 pp`
-- new `phase3_vecstraight` `cond1-cond2` gap at `150k`:
-  `f=3.5 +16.4 pp`, `f=5.0 +18.8 pp`
+- qx6 continuation mirrors:
+  - `iwr-results/phase3_vecstraight_sameckpt_continuation_50000_{public_random,sender_shuffle,fixed0}_15seeds_iwr_20260327`
+  - `iwr-results/phase3_vecstraight_sameckpt_continuation_100000_{sender_shuffle,fixed0}_15seeds_iwr_20260327`
+- Hetzner continuation mirror:
+  - `hetzner-results/phase3_vecstraight_sameckpt_continuation_50000_uniform_15seeds_hetzner_20260327`
+- qx6 exogenous mirrors:
+  - `iwr-results/phase3_vecstraight_exogenous_{uniform,fixed0,fixed1}_15seeds_iwr_20260328`
+- Hetzner exogenous mirrors:
+  - `hetzner-results/phase3_vecstraight_exogenous_{public_random,fixed0}_15seeds_hetzner_20260328`
+- qx6 loss-switch mirrors:
+  - `iwr-results/phase3_vecstraight_sameckpt_continuation_50000_{none_base,none_zeroaux,uniform_zeroaux}_15seeds_iwr_20260330`
+- Hetzner comm × history mirrors:
+  - `hetzner-results/phase3_vecstraight_comm_history_factorial_{with_comm_full_history,with_comm_reduced_history,without_comm_full_history,without_comm_reduced_history}_15seeds_hetzner_20260330par24`
 
-So the late positive `f=3.5` communication gap survives, but the late negative `f=5.0` gap does
-not.
+## Canonical Remote Roots
 
-## Naming Rules That Matter
+### Hetzner
 
-Use these family tokens in all new outputs:
+- project dir:
+  `/root/compute-work/projects/dsc-epgg-vectorized`
+- run-dir base:
+  `/root/compute-work/runs/dsc-epgg-vectorized`
 
-- `phase3_vecstraight_*`:
-  analyses derived from this straight vectorized family
-- `phase3_staged_*`:
-  analyses derived from the older staged/warm-start family
-- `phase3_compare_staged_vs_vecstraight_*`:
-  direct cross-family comparisons
+### IWR / qx6
 
-Do **not** create new ambiguous roots like:
+- qx6 staging base for vecstraight reruns:
+  `/export/scratch/iguennou/staging/dsc-epgg-vectorized`
+- qx6 run-dir base:
+  `/export/scratch/iguennou/runs/dsc-epgg-vectorized`
+
+### Completed March 30 qx6 loss-switch control
+
+- batch run dir:
+  `/export/scratch/iguennou/runs/dsc-epgg-vectorized/phase3-vecstraight-qx6-lossswitch-controls-20260330`
+- staged repo root:
+  `/export/scratch/iguennou/staging/dsc-epgg-vectorized/phase3-vecstraight-lossswitch-lite-20260330`
+- arm output roots:
+  `/export/scratch/iguennou/staging/dsc-epgg-vectorized/phase3-vecstraight-lossswitch-lite-20260330/outputs/eval/phase3_vecstraight_sameckpt_continuation_50000_{none_base,none_zeroaux,uniform_zeroaux}_15seeds_iwr_20260330`
+
+### Completed March 30 Hetzner comm × history factorial
+
+- batch run dir:
+  `/root/compute-work/runs/dsc-epgg-vectorized/phase3-vecstraight-comm-history-factorial-parallel-20260330x24`
+- cell output roots:
+  `/root/compute-work/projects/dsc-epgg-vectorized/outputs/train/phase3_vecstraight_comm_history_factorial_{with_comm_full_history,with_comm_reduced_history,without_comm_full_history,without_comm_reduced_history}_15seeds_hetzner_20260330par24`
+
+## Fetch Conventions
+
+- Fetch Hetzner eval or train roots from
+  `/root/compute-work/projects/dsc-epgg-vectorized/outputs/{eval,train}/<basename>` into
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/hetzner-results/<basename>`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/hetzner-results)
+- Fetch IWR/qx6 eval roots from the relevant staging `outputs/eval/<basename>` into
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/<basename>`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results)
+- After fetching a manuscript-facing root, record it here and keep the basename unchanged
+
+## Naming Rules
+
+Use explicit family tokens in new output roots:
+
+- `phase3_vecstraight_*`: analyses derived from this straight vectorized family
+- `phase3_staged_*`: analyses derived from the older staged/warm-start family
+- `phase3_compare_staged_vs_vecstraight_*`: direct cross-family comparisons
+
+Avoid ambiguous names such as:
 
 - `phase3_sameckpt_*`
 - `phase3_frozen150k_*`
@@ -77,10 +126,7 @@ without a family token.
 
 ## Common Confusions
 
-- `cond1` / `cond2` tell you the condition only. They do **not** identify the training family.
-- This repo's current phase-3 results are not yet a drop-in replacement for the manuscript's old
-  staged family. The intervention stack has not yet been fully rerun here.
-- Reports should say:
-  `training_family`, `source_repo`, `source_train_root`, `source_eval_root`, `checkpoint episodes`,
-  and `seed count`.
-
+- `cond1` and `cond2` identify the condition only, not the training family.
+- Use this file for path ownership, not for scientific interpretation.
+- Use [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md) for current run-state context.
+- Use [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md) for the active remaining-work checklist.

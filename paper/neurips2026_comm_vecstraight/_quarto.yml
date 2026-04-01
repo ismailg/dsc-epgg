@@ -10,6 +10,8 @@ format:
     toc: false
     number-sections: true
     colorlinks: true
+    cite-method: citeproc
+    csl: _extensions/quarto-journals/acm/acm-sigchi-proceedings.csl
 
 bibliography: refs.bib
 engine: jupyter

@@ -17,6 +17,7 @@ acm-metadata:
   acm-year: "2026"
   doi: "XXXXXXX.XXXXXXX"
 bibliography: refs.bib
+reference-section-title: ""
 header-includes:
   - \usepackage{enumitem}
   - \usepackage{multirow}
@@ -25,7 +26,7 @@ header-includes:
   - \providecommand{\commgap}{\Delta_{\mathrm{comm}}}
   - \providecommand{\fhat}{\hat{f}}
 abstract: |
-  We study emergent communication in a four-agent public goods game with hidden regime switching, noisy private observations, and binary messaging under independent PPO. Communication-trained agents outperform no-communication agents by $+16.4\pp$ at the mixed-motive multiplier and $+18.8\pp$ at the cooperation-dominant multiplier over 15 seeds. Frozen-policy interventions, single-slot sender probes, and cross-seed surrogate models decompose this endpoint dependence into three forms: stable variable signal input provides the dominant benefit, coarse shared summaries add smaller regime-dependent value, and rich sender-specific conventions---behaviorally large within a trained population---do not generalize across independently trained seeds. The learned endpoint protocol is real but not uniquely privileged: several random or shuffled replacements perform comparably, and a constant token of 1 slightly outperforms the natural stream at the cooperation-dominant regime.
+  When agents in a social dilemma can send binary messages before acting, does the resulting cooperation gain require a meaningful shared protocol, or does most of the benefit come from simply having variable input in the message channel? We study this question in a four-agent public goods game with hidden regime switching under independent PPO. Communication-trained agents outperform no-communication agents by $+16.4\pp$ and $+18.8\pp$ at the two focal multipliers (15 seeds). Frozen-policy perturbations show that the learned message stream is not uniquely privileged, and the benefit decomposes into stable variable input (dominant, cross-seed), coarse shared summaries (smaller, regime-dependent), and rich sender-specific conventions (large within a seed, non-transferable across seeds). A from-scratch communication $\times$ history factorial confirms that this benefit requires temporal observation context: under reduced history, the communication advantage nearly vanishes.
 keywords:
   - emergent communication
   - multi-agent reinforcement learning
@@ -394,6 +395,51 @@ def history_average_delta(history_intervention, f_value):
     )
 
 
+# --- Loss-switch repair data ---
+LOSSSWITCH_SUMMARY_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_lossswitch_controls_status_20260401"
+    / "report"
+    / "sameckpt_continuation_summary.csv"
+)
+LOSSSWITCH_PAIRED_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_lossswitch_controls_status_20260401"
+    / "report"
+    / "sameckpt_continuation_paired_stats.csv"
+)
+LOSSSWITCH_SUMMARY_LOOKUP = {
+    (row["mode"], row["checkpoint_episode"], row["f_value"]): row for row in LOSSSWITCH_SUMMARY_ROWS
+}
+LOSSSWITCH_PAIRED_LOOKUP = {
+    (row["mode"], row["checkpoint_episode"], row["f_value"]): row for row in LOSSSWITCH_PAIRED_ROWS
+}
+
+
+def lossswitch_value(mode, checkpoint_episode, f_value, field):
+    return float(LOSSSWITCH_SUMMARY_LOOKUP[(mode, str(checkpoint_episode), str(f_value))][field])
+
+
+def lossswitch_paired_value(mode, checkpoint_episode, f_value, field):
+    return float(LOSSSWITCH_PAIRED_LOOKUP[(mode, str(checkpoint_episode), str(f_value))][field])
+
+
+# --- Comm x history factorial data ---
+FACTORIAL_ROWS = load_csv(
+    EVAL_ROOT
+    / "phase3_vecstraight_comm_history_factorial_status_20260401"
+    / "report"
+    / "comm_history_factorial_summary.csv"
+)
+FACTORIAL_LOOKUP = {
+    (row["cell"], str(row["f_value"])): row for row in FACTORIAL_ROWS
+}
+
+
+def factorial_value(cell, f_value, field):
+    return float(FACTORIAL_LOOKUP[(cell, str(f_value))][field])
+
+
 # --- Aggregate-cancellation and polarity-alignment data (for appendix) ---
 SEMANTICS_SUITE_ROOTS = {
     "50000": EVAL_ROOT / "phase3_vecstraight_frozen50k_expanded_15seeds_local_20260327" / "suite",
@@ -636,7 +682,7 @@ def render_base_gap_table():
 
 
 FROZEN_TABLE_MODES = [
-    ("none", tex_tt("none")),
+    ("none", tex_tt("natural")),
     ("sender_shuffle", tex_tt("sender_shuffle")),
     ("permute_slots", tex_tt("permute_slots")),
     ("public_random", tex_tt("public_random")),
@@ -687,7 +733,7 @@ def render_frozen_table():
 def render_sender_table():
     lines = [
         r"\begin{table}[t]",
-        r"  \caption{Single-slot intervention probes at 150k. Mean $|\Delta|$ is the average absolute shift in receiver cooperation probability when one sender's token is forced. Flip0 and Flip1 are action-flip rates under forced token~0 and~1.}\label{tab:sender_causal}",
+        r"  \caption{Single-slot intervention probes at 150k. Mean $|\Delta|$ is the average absolute shift in receiver cooperation probability when one sender's token is forced. Flip0 and Flip1 are the fraction of timesteps where the receiver's action switches (C$\to$D or D$\to$C) relative to the natural-message outcome when the sender's token is forced to 0 or 1.}\label{tab:sender_causal}",
         r"  \centering",
         r"  \small",
         r"  \begin{tabular}{lcccc}",
@@ -706,6 +752,42 @@ def render_sender_table():
                     fmt_rate(row["mean_abs_delta_p_cooperate"], 4),
                     fmt_rate(row["mean_flip_rate_force0"], 4),
                     fmt_rate(row["mean_flip_rate_force1"], 4),
+                ]
+            )
+            + r" \\"
+        )
+    lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+    return "\n".join(lines)
+
+
+LOWDIM_SURROGATE_TABLE_MODELS = [
+    ("history_only", tex_tt("history_only")),
+    ("history_any", tex_tt("history_any")),
+    ("history_count", tex_tt("history_count")),
+    ("history_sender_bits", tex_tt("history_sender_bits")),
+    ("history_pattern", tex_tt("history_pattern")),
+]
+
+
+def render_lowdim_surrogate_table():
+    lines = [
+        r"\begin{table}[t]",
+        r"  \caption{Grouped cross-seed surrogate performance at 150k. Logistic-regression surrogates are evaluated with grouped cross-validation, holding out entire training seeds. Entries are mean held-out log loss; lower is better.}\label{tab:lowdim_surrogate}",
+        r"  \centering",
+        r"  \small",
+        r"  \begin{tabular}{lcc}",
+        r"    \toprule",
+        r"    Model & $f=3.5$ & $f=5.0$ \\",
+        r"    \midrule",
+    ]
+    for model_name, label in LOWDIM_SURROGATE_TABLE_MODELS:
+        lines.append(
+            "    "
+            + " & ".join(
+                [
+                    label,
+                    fmt_rate(lowdim_surrogate_row("3.5", model_name)["mean_log_loss"], 4),
+                    fmt_rate(lowdim_surrogate_row("5.0", model_name)["mean_log_loss"], 4),
                 ]
             )
             + r" \\"
@@ -820,13 +902,14 @@ Multi-agent reinforcement learning (MARL) has produced a growing literature on e
 
 This attribution problem is especially acute under independent learning, where non-stationarity makes it difficult to separate message semantics from broader training dynamics [@papoudakis2019dealing; @oroojlooyjadid2022review]. Yet a parallel literature on coordination devices suggests that even meaningless exogenous signals can aid cooperation by serving as shared correlation anchors [@aumann1974subjectivity; @duffy2017sunspots]. This raises a sharper question than whether communication "works": when agents benefit from a message channel, how much of that benefit requires a portable learned code, and how much comes from the mere presence of stable, variable signal input?
 
-We study this question in a four-agent extended public goods game (EPGG) with hidden regime switching, noisy private observations, and optional binary communication [@orzan2024pgg]. The environment is useful because the severity of the social dilemma changes over time without direct notification, making communication potentially valuable but not equally so in every regime. We organize the paper around three empirical questions:
+We study this question in a four-agent extended public goods game (EPGG) with hidden regime switching, noisy private observations, and optional binary communication [@orzan2024pgg]. The environment is useful because the severity of the social dilemma changes over time without direct notification, making communication potentially valuable but not equally so in every regime. We organize the paper around four empirical questions:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
   \item \textbf{Channel benefit:} does having a communication channel help relative to a matched no-communication training path?
   \item \textbf{Endpoint structure:} how much of the frozen-policy message dependence survives coarse replacements such as shuffled, random, constant, or token-rate-matched channels?
   \item \textbf{Mechanism portability:} is the residual message dependence a portable shared code, or a mixture of coarse summaries and seed-specific private conventions?
+  \item \textbf{History gating:} does the communication benefit require temporal observation context, or can messages substitute for missing history features?
 \end{enumerate}
 ```
 
@@ -834,13 +917,14 @@ Our main findings are:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{Positive late communication gap at both focal regimes.} By 150k episodes, communication-trained agents cooperate substantially more than no-communication agents at both the mixed-motive and cooperation-dominant multipliers.
-  \item \textbf{Real but non-unique endpoint channel use.} Frozen-policy perturbations, token-rate-matched controls, and single-slot sender probes show that the endpoint policy uses the channel, but the natural stream is not uniquely optimal---several shuffled or random replacements perform comparably.
-  \item \textbf{Three forms of message dependence.} Low-dimensional analyses show that (a)~stable variable signal input provides the dominant cross-seed benefit, (b)~coarse shared summaries add smaller regime-dependent value, and (c)~rich sender-indexed conventions are behaviorally large within a seed but do not generalize across independently trained populations.
+  \item \textbf{Communication helps at both focal regimes.} By 150k episodes, agents trained with a message channel cooperate substantially more than agents trained without one: $+16.4\pp$ at $f=3.5$ and $+18.8\pp$ at $f=5.0$.
+  \item \textbf{The learned protocol is useful but not uniquely privileged.} When we freeze all weights and replace the learned messages with random, shuffled, or token-rate-matched alternatives, cooperation often stays close to the natural stream. The endpoint policy depends more on receiving stable variable input than on receiving the exact learned token pattern.
+  \item \textbf{Message dependence has three forms.} Within a trained population, who sent the ones matters strongly: sender-specific patterns with the same count can produce very different behavior. Across seeds, however, those rich patterns do not transfer: grouped held-out-seed surrogate models predict worse with full sender-pattern features than with simpler any-token or count summaries. The portable part of the benefit is therefore coarse---stable variable input first, coarse summaries second, sender-specific conventions last.
+  \item \textbf{Communication requires temporal context.} In a from-scratch $2 \times 2$ factorial, the communication advantage is large under full temporal-history observations ($+15.7\pp$ at $f=3.5$, $+13.7\pp$ at $f=5.0$) but nearly disappears under reduced history ($+1.9\pp$ and $-0.1\pp$). Messages do not substitute for missing temporal features; they depend on them.
 \end{enumerate}
 ```
 
-We focus on the base training comparison, frozen-policy interventions, single-slot sender probes, and low-dimensional mechanism analysis. Supplementary appendices report additional evaluation-time controls including observation-noise sweeps, message--history interaction grids, same-checkpoint continuation experiments, and preliminary from-scratch exogenous-channel training results.
+We focus on the base training comparison, frozen-policy interventions, single-slot sender probes, low-dimensional mechanism analysis, and the communication $\times$ history factorial. Supplementary appendices report additional evaluation-time controls including observation-noise sweeps, message--history interaction grids, same-checkpoint continuation experiments, and preliminary from-scratch exogenous-channel training results.
 
 # Setup {#sec-setup}
 
@@ -851,21 +935,21 @@ $$
 u_i = \frac{f_t}{N} \sum_{j=1}^{N} c \cdot \mathbf{1}[a_j = C] \;+\; c \cdot \mathbf{1}[a_i = D].
 $$
 
-The hidden multiplier $f_t$ takes values in $\mathcal{F} = \{0.5, 1.5, 2.5, 3.5, 5.0\}$ and switches with probability $\rho = 0.05$ per round. Each agent's action is also subject to tremble noise with probability $\varepsilon_{\text{tremble}} = 0.05$.
+The hidden multiplier $f_t$ takes values in $\mathcal{F} = \{0.5, 1.5, 2.5, 3.5, 5.0\}$ and switches with probability $\rho = 0.05$ per round. Each agent's chosen action is independently flipped to the opposite action with probability $\varepsilon_{\text{tremble}} = 0.05$ (tremble noise).
 
-When $f < N = 4$, defection is the dominant strategy; when $f > N$, cooperation dominates regardless of others' actions. The mixed-motive regime ($f=3.5$) is the theoretically central case because cooperation is collectively beneficial but still individually costly. The cooperation-dominant regime ($f=5.0$) serves as a contrast where cooperation is individually rational. These two multipliers are the main manuscript targets.
+When $f < N = 4$, defection is the dominant strategy; when $f > N$, cooperation dominates regardless of others' actions. Among the sub-threshold regimes ($f < N = 4$), where defection is individually rational despite being collectively costly, $f=3.5$ is closest to the cooperation threshold and therefore the most plausible target for communication to tip behavior. The cooperation-dominant regime ($f=5.0$) serves as a contrast where cooperation is individually rational. These two multipliers are the main manuscript targets.
 
 ## Communication condition
 
-In the communication condition (\texttt{comm}), agents simultaneously broadcast a binary message $m_i \in \{0,1\}$ before choosing actions. All agents observe the sender-indexed message vector. Messages have no preassigned meaning. In the no-communication condition (\texttt{no-comm}), no messages are exchanged.
+In the communication condition (\texttt{comm}), agents simultaneously broadcast a binary message $m_i \in \{0,1\}$ before choosing actions. All agents observe the full message vector and know which agent sent each message. Messages have no preassigned meaning. In the no-communication condition (\texttt{no-comm}), no messages are exchanged.
 
 ## Training
 
-We train agents with independent PPO [@schulman2017proximal] and generalized advantage estimation [@schulman2016high], using feed-forward policies, a trainer-side observation wrapper with lagged social summaries, noisy private regime observations, and entropy annealing over training. All results use 15 independent training seeds with checkpoints at 25k, 50k, 100k, and 150k episodes.
+We train agents with independent PPO [@schulman2017proximal] and generalized advantage estimation [@schulman2016high], using feed-forward policies. Each agent's observation includes the noisy private signal $\fhat$, the agent's endowment, an exponentially weighted moving average (EWMA) of group cooperation, the agent's own last action, and the lagged group cooperation fraction. In the communication condition, one-hot encodings of each sender's message are appended to the observation. A linear entropy-annealing schedule encourages early exploration. The communication-trained agents also receive two auxiliary training losses: a message-entropy regularizer (\texttt{sign\_lambda}) that discourages message-token collapse, and a listening bonus (\texttt{list\_lambda}) that rewards the action policy for responding to message input. All reported endpoint values use greedy (deterministic argmax) evaluation. All results use 15 independent training runs (seeds), with checkpoints at 25k, 50k, 100k, and 150k episodes.
 
 ## Evaluation design
 
-We draw on four main experiment families and five supplementary families:
+We draw on five main experiment families and five supplementary families:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
@@ -873,10 +957,31 @@ We draw on four main experiment families and five supplementary families:
   \item \textbf{Frozen-policy intervention suites} at 50k and 150k, where all weights are frozen and the message stream is perturbed at evaluation time.
   \item \textbf{Single-slot sender probes} at 150k, forcing one sender's token while holding all else fixed.
   \item \textbf{Low-dimensional mechanism analyses} at 150k, using natural frozen traces to compare count, sender-pattern, and surrogate-model explanations.
+  \item \textbf{Communication $\times$ history factorial}, trained from scratch with 15 seeds per cell, crossing communication (on/off) with temporal history features (full/reduced).
 \end{enumerate}
 ```
 
 Supplementary analyses include aggregate-cancellation and polarity-alignment diagnostics, observation-noise sweeps, message--history interaction grids, same-checkpoint continuation controls, and preliminary from-scratch exogenous-channel training results (Appendices~\ref{app:alignment}--\ref{app:exogenous}). Unless otherwise noted, reported values are greedy evaluation means over 15 training seeds.
+
+These families answer different questions, and each has characteristic limitations. The following guide summarizes what each family can and cannot identify:
+
+```{=latex}
+\noindent\textbf{Evidence guide.}
+\begin{center}
+\small
+\begin{tabular}{p{3.2cm}p{4.8cm}p{4.8cm}}
+  \toprule
+  Family & What it tests & What it cannot identify \\
+  \midrule
+  Base checkpoint suites & Descriptive gap between separately trained comm and no-comm policies & Whether the gap is caused by messages vs.\ broader training-path differences \\
+  Frozen-policy interventions & Online dependence of a fixed policy on its message input & Training-time value of the communication channel \\
+  Single-slot sender probes & Input sensitivity of a frozen policy to one sender's token & Full equilibrium effects of a sender choosing a message \\
+  Low-dimensional mechanism & Which message features (count, sender identity) predict behavior across seeds & Causal effects of changing message features under matched histories \\
+  Comm $\times$ history factorial & Whether communication's training-time benefit requires temporal observation features & Which specific features mediate the interaction \\
+  \bottomrule
+\end{tabular}
+\end{center}
+```
 
 These families answer different questions. The base communication gap and the natural semantics summaries are descriptive: they characterize the structure that appears under the policy-induced rollout distribution, but they do not by themselves identify what would happen if the message channel were forced to change. The frozen-policy interventions and single-slot sender probes are interventional endpoint analyses: they ask how a fixed policy responds when incoming messages are replaced or one sender's token is forced. Same-checkpoint continuation instead targets continued learning from a common initialization. We therefore use the observational analyses to describe structure and cancellation, and the interventional analyses to test whether the endpoint policy or the continuing training process actually depends on message content.
 
@@ -884,7 +989,7 @@ These families answer different questions. The base communication gap and the na
 
 ## Descriptive communication gap {#sec-main-result}
 
-We begin with a descriptive comparison between separately trained communication and no-communication conditions. Because the two conditions use independent PPO with different training trajectories, the gap mixes message effects with broader optimization-path differences. We use it as scene-setting rather than as a clean causal estimate.
+We begin with a descriptive comparison between separately trained communication and no-communication conditions. We report the communication gap $\commgap$ (the difference in cooperation rates between \texttt{comm} and \texttt{no-comm}, in percentage points, pp) at each checkpoint---the trained policy state at a given episode count (hereafter "endpoint" when referring to the final 150k checkpoint). Because the two conditions use independent PPO with different training trajectories, the gap mixes message effects with broader optimization-path differences. We use it as scene-setting rather than as a clean causal estimate.
 
 ```{python}
 #| echo: false
@@ -952,7 +1057,7 @@ plt.show()
 #| echo: false
 #| output: asis
 print(
-    f"The late communication gap is positive at both focal regimes. By 150k, communication-trained agents cooperate {pp_math(gap_value('3.500', '150000', 'new_gap'))} more than no-communication agents at $f=3.5$ and {pp_math(gap_value('5.000', '150000', 'new_gap'))} more at $f=5.0$. The gap widens over training at both multipliers, consistent with increasing message integration during learning. An important caveat is that this descriptive gap reflects both message-conditioned learning and broader differences between the two training paths."
+    f"The late communication gap is positive at both focal regimes (Table~\\ref{{tab:comm_gap}}, Figure~\\ref{{fig-base-gap}}). By 150k, communication-trained agents cooperate {pp_math(gap_value('3.500', '150000', 'new_gap'))} more than no-communication agents at $f=3.5$ and {pp_math(gap_value('5.000', '150000', 'new_gap'))} more at $f=5.0$. The gap widens over training at both multipliers, consistent with increasing message integration during learning. An important caveat is that this descriptive gap reflects both message-conditioned learning and broader differences between the two training paths."
 )
 ```
 
@@ -960,7 +1065,29 @@ print(
 
 The frozen-policy interventions ask a narrower question: once all weights are fixed, how much does behavior change when the incoming message stream is perturbed? These interventions measure the online dependence of the frozen policy on its message input. They do not measure the full training-time value of the communication channel.
 
-Throughout this section, \texttt{none} means the natural learned message stream, not no communication.
+Throughout this section, \texttt{natural} refers to the learned message stream with no evaluation-time perturbation. The interventions are organized into four groups, each targeting a different property of the message stream:
+
+```{=latex}
+\begin{enumerate}[leftmargin=*,nosep]
+  \item \emph{Destroy content but preserve variability}: replace messages with random or shuffled tokens, testing whether state-conditioned meaning matters.
+  \item \emph{Destroy sender identity}: permute which sender's message goes to which slot, testing whether receivers care \emph{who} said what.
+  \item \emph{Match token-rate distribution}: draw replacement tokens from the learned marginal frequency, testing whether the aggregate token distribution explains the benefit.
+  \item \emph{Remove variability entirely}: force constant tokens or zero out the message observation, testing whether any signal at all is needed.
+\end{enumerate}
+```
+
+The specific intervention modes are:
+
+```{=latex}
+\begin{itemize}[leftmargin=*,nosep]
+  \item \texttt{sender\_shuffle}: each sender's token is resampled from that sender's empirical frequency, destroying state-conditioned content while preserving per-sender token rates.
+  \item \texttt{permute\_slots}: messages are permuted across sender slots, testing whether the policy cares \emph{who} sent each token.
+  \item \texttt{public\_random}: all senders receive the same shared random bit. \texttt{indep\_random}: each sender gets an independent random bit.
+  \item \texttt{marginal}: each sender's token is drawn independently from the pooled global frequency. \texttt{public\_marginal}: one shared token drawn from that frequency. These test whether the learned token-rate distribution explains the benefit.
+  \item \texttt{fixed0}, \texttt{fixed1}: all senders forced to a constant token of 0 or 1. \texttt{zeros}: the entire message observation is set to zero (no signal at all).
+  \item \texttt{no-comm baseline}: the separately trained no-communication policy, providing the reference for agents that never had a channel.
+\end{itemize}
+```
 
 ```{python}
 #| echo: false
@@ -1037,7 +1164,7 @@ plt.show()
 #| echo: false
 #| output: asis
 print(
-    f"By 150k, the endpoint policy depends meaningfully on message input. Natural messages outperform the no-communication baseline by {pp_math(frozen_damage_vs_natural('150000', '3.500', 'baseline_none'))} at $f=3.5$ and {pp_math(frozen_damage_vs_natural('150000', '5.000', 'baseline_none'))} at $f=5.0$. This is large enough to reject the hypothesis that message inputs are simply ignored."
+    f"By 150k, the endpoint policy depends meaningfully on message input (Table~\\ref{{tab:frozen}}, Figure~\\ref{{fig-frozen-heatmap}}). Natural messages outperform the no-communication baseline by {pp_math(frozen_damage_vs_natural('150000', '3.500', 'baseline_none'))} at $f=3.5$ and {pp_math(frozen_damage_vs_natural('150000', '5.000', 'baseline_none'))} at $f=5.0$. This is large enough to reject the hypothesis that message inputs are simply ignored."
 )
 ```
 
@@ -1058,7 +1185,7 @@ print(
 )
 ```
 
-The endpoint picture is therefore mixed. Natural messages are useful and usually competitive, but the learned stream is not uniquely optimal. The strongest current reading is that the load-bearing part of the channel involves stable variable signal input rather than fine-grained semantic content.
+The endpoint picture is therefore mixed. Learned messages consistently outperform silence and constant signals, but they hold only a slim advantage over random or shuffled replacements. The implication is that the frozen policy depends more on receiving *some* variable input in its message slots than on receiving the *particular* tokens the learned protocol produces.
 
 ## Single-slot sender probes at 150k {#sec-sender-probes}
 
@@ -1133,7 +1260,7 @@ plt.show()
 #| echo: false
 #| output: asis
 print(
-    f"The sender influence signal is essentially zero in the low-value regimes and large in the two focal regimes. At $f=3.5$, forcing a sender's token shifts receiver cooperation probability by about {pp_math(sender_overall('overall_all', '3.5')['mean_abs_delta_p_cooperate'])} on average, with action-flip rates around {pct_math(sender_overall('overall_all', '3.5')['mean_flip_rate_force0'])}--{pct_math(sender_overall('overall_all', '3.5')['mean_flip_rate_force1'])}. At $f=5.0$, the mean absolute effect rises to about {pp_math(sender_overall('overall_all', '5.0')['mean_abs_delta_p_cooperate'])}, with flip rates around {pct_math(sender_overall('overall_all', '5.0')['mean_flip_rate_force0'])}--{pct_math(sender_overall('overall_all', '5.0')['mean_flip_rate_force1'])}."
+    f"The sender influence signal is essentially zero in the low-value regimes and large in the two focal regimes (Table~\\ref{{tab:sender_causal}}, Figure~\\ref{{fig-sender-matrix}}). At $f=3.5$, forcing a sender's token shifts receiver cooperation probability by about {pp_math(sender_overall('overall_all', '3.5')['mean_abs_delta_p_cooperate'])} on average, with action-flip rates around {pct_math(sender_overall('overall_all', '3.5')['mean_flip_rate_force0'])}--{pct_math(sender_overall('overall_all', '3.5')['mean_flip_rate_force1'])}. At $f=5.0$, the mean absolute effect rises to about {pp_math(sender_overall('overall_all', '5.0')['mean_abs_delta_p_cooperate'])}, with flip rates around {pct_math(sender_overall('overall_all', '5.0')['mean_flip_rate_force0'])}--{pct_math(sender_overall('overall_all', '5.0')['mean_flip_rate_force1'])}."
 )
 ```
 
@@ -1141,22 +1268,24 @@ print(
 #| echo: false
 #| output: asis
 print(
-    f"The self/nonself split is also informative. Nonself effects are positive at $f=3.5$ and $f=5.0$ ({math_text(fmt_rate(sender_overall('overall_nonself', '3.5')['mean_delta_p_cooperate'], 4))} and {math_text(fmt_rate(sender_overall('overall_nonself', '5.0')['mean_delta_p_cooperate'], 4))}), whereas self-effects are slightly negative ({math_text(fmt_rate(sender_overall('overall_self', '3.5')['mean_delta_p_cooperate'], 4))} and {math_text(fmt_rate(sender_overall('overall_self', '5.0')['mean_delta_p_cooperate'], 4))}). The effects are also heterogeneous across sender--receiver pairs, consistent with an asymmetric influence network rather than a perfectly symmetric shared code."
+    f"Self versus nonself interventions distinguish social use of the channel from self-conditioning. Forcing another agent's message increases cooperation on average by {pp_math(sender_overall('overall_nonself', '3.5')['mean_delta_p_cooperate'])} at $f=3.5$ and {pp_math(sender_overall('overall_nonself', '5.0')['mean_delta_p_cooperate'])} at $f=5.0$, whereas forcing the receiver's own message has small negative effects ({pp_math(sender_overall('overall_self', '3.5')['mean_delta_p_cooperate'])} and {pp_math(sender_overall('overall_self', '5.0')['mean_delta_p_cooperate'])}). This suggests that the message channel is used primarily to respond to others rather than as a private self-cue. The magnitudes also vary across sender--receiver pairs, indicating an asymmetric influence structure rather than a uniform shared code."
 )
 ```
 
-Appendix~\ref{app:alignment} shows the descriptive complement of this heterogeneity: once sender-conditioned endpoint effects are pooled into a single any-token summary, much of the structure cancels out rather than disappearing.
+Appendix~\ref{app:alignment} shows the descriptive counterpart of this heterogeneity: once sender-conditioned endpoint effects are pooled into a single any-token summary, much of the structure cancels in the mean rather than disappearing.
 
 ## Low-dimensional message-response structure {#sec-lowdim}
 
-The frozen and sender-probe analyses show that messages matter, but they do not tell us whether receivers mainly react to coarse summaries or to richer sender-indexed patterns. We analyzed the natural 150k frozen traces using count-of-ones summaries, any-token indicators, within-count pattern heterogeneity, and grouped cross-seed surrogate models. These analyses are descriptive: count-response curves reflect associations under the policy-induced state distribution, not interventional effects of changing message content while holding history fixed.
+The frozen and sender-probe analyses show that messages matter, but they do not tell us what level of message structure the policy actually uses. We address two questions using the natural 150k frozen traces. Note that these analyses are descriptive---they reflect associations under the policy-induced state distribution, not interventional effects of changing message content while holding history fixed.
+
+\paragraph{Within a seed, do receivers care about sender identity?}
 
 ```{python}
 #| echo: false
 #| output: asis
 tt_at = tex_tt("any_token")
 print(
-    f"At $f=3.5$, count-of-ones is weak. Cooperation is nearly flat for counts $0$, $1$, and $2$ ({pct_math(lowdim_count_row('3.5', '0')['mean_p_cooperate'])}, {pct_math(lowdim_count_row('3.5', '1')['mean_p_cooperate'])}, and {pct_math(lowdim_count_row('3.5', '2')['mean_p_cooperate'])}), and rises only at $3$ ones ({pct_math(lowdim_count_row('3.5', '3')['mean_p_cooperate'])}). The coarse {tt_at} summary shifts cooperation by only {pp_math(any_token_delta('3.5'))}. At $f=5.0$, coarse message structure matters more but remains non-monotone: {tt_at} is worth {pp_math(any_token_delta('5.0'))}, count $3$ is highest ({pct_math(lowdim_count_row('5.0', '3')['mean_p_cooperate'])}), but count $2$ falls below count $1$ ({pct_math(lowdim_count_row('5.0', '2')['mean_p_cooperate'])} versus {pct_math(lowdim_count_row('5.0', '1')['mean_p_cooperate'])})."
+    f"Count alone does not explain within-seed behavior. At $f=3.5$, the number of ones is a weak summary: cooperation is nearly unchanged at counts $0$, $1$, and $2$ ({pct_math(lowdim_count_row('3.5', '0')['mean_p_cooperate'])}, {pct_math(lowdim_count_row('3.5', '1')['mean_p_cooperate'])}, and {pct_math(lowdim_count_row('3.5', '2')['mean_p_cooperate'])}), and rises only at $3$ ones ({pct_math(lowdim_count_row('3.5', '3')['mean_p_cooperate'])}); the coarse {tt_at} split moves cooperation by only {pp_math(any_token_delta('3.5'))}. At $f=5.0$, coarse structure matters more, but still not in a simple count-based way: {tt_at} is worth {pp_math(any_token_delta('5.0'))}, count $3$ is highest ({pct_math(lowdim_count_row('5.0', '3')['mean_p_cooperate'])}), yet count $2$ is lower than count $1$ ({pct_math(lowdim_count_row('5.0', '2')['mean_p_cooperate'])} versus {pct_math(lowdim_count_row('5.0', '1')['mean_p_cooperate'])})."
 )
 ```
 
@@ -1164,8 +1293,23 @@ print(
 #| echo: false
 #| output: asis
 print(
-    f"Within a trained seed, sender identity is behaviorally important. Holding the number of ones fixed, median within-seed cooperation gaps between the lowest and highest patterns reach {ppnum_math(pattern_max_gap_pp('3.5'))} at $f=3.5$ and {ppnum_math(pattern_max_gap_pp('5.0'))} at $f=5.0$. So within a given trained population, the policy is not merely reacting to a pooled count statistic."
+    f"If pooled count were the main thing the policy used, then message patterns with the same number of ones should produce similar behavior. They do not. Within a trained seed, holding the number of ones fixed, the median gap between the lowest- and highest-cooperation sender patterns reaches {ppnum_math(pattern_max_gap_pp('3.5'))} at $f=3.5$ and {ppnum_math(pattern_max_gap_pp('5.0'))} at $f=5.0$. So within a given trained population, who sent the ones matters, not just how many ones were sent."
 )
+```
+
+```{python}
+#| echo: false
+#| output: asis
+```
+
+\paragraph{Across seeds, do those patterns transfer?}
+
+If the rich sender-specific conventions found within each seed were part of a shared code, they should help predict behavior in held-out seeds too. We test this with logistic-regression surrogate models using grouped cross-validation, where entire training seeds are held out.
+
+```{python}
+#| echo: false
+#| output: asis
+print(render_lowdim_surrogate_table())
 ```
 
 ```{python}
@@ -1181,61 +1325,119 @@ ll_hc = math_text(fmt_rate(lowdim_surrogate_row('5.0', 'history_count')['mean_lo
 ll_hp = math_text(fmt_rate(lowdim_surrogate_row('5.0', 'history_pattern')['mean_log_loss'], 4))
 ll_diff = math_text(fmt_num(float(lowdim_surrogate_row('5.0', 'history_pattern')['mean_log_loss']) - float(lowdim_surrogate_row('5.0', 'history_count')['mean_log_loss']), 3))
 print(
-    f"Across seeds, however, richer sender-indexed features do not generalize. Under grouped cross-validation by training seed, {tt_ha} and {tt_ho} match or beat {tt_hc}, whereas {tt_hsb} and especially {tt_hp} perform worse. At $f=5.0$, mean log loss is {ll_ha} for {tt_ha}, {ll_hc} for {tt_hc}, and {ll_hp} for full patterns---a deterioration of {ll_diff} in log loss when adding richer sender-pattern features."
+    f"The surrogate summary table reports held-out log loss for progressively richer models. {tt_ho} uses only private-signal and temporal-history features, {tt_ha} adds a binary any-token indicator, {tt_hc} adds the count of ones, {tt_hsb} adds sender-identity bits, and {tt_hp} uses the full sender-indexed pattern. If sender-specific conventions transferred across seeds, the richer models should predict better on held-out seeds. They do not. At $f=5.0$, held-out log loss is {ll_ha} for {tt_ha}, {ll_hc} for {tt_hc}, and {ll_hp} for {tt_hp}---an increase of {ll_diff} when moving from count summaries to full sender-pattern features. The same qualitative ordering appears at $f=3.5$: {tt_hp} is the worst-performing model there as well. The within-seed conventions are therefore behaviorally real but not portable across independently trained populations."
 )
 ```
 
-These results support a layered reading of endpoint message dependence. Having any variable signal input in the message slots provides a coordination anchor that transfers across seeds. Coarse shared summaries add modest regime-dependent value. Richer sender-specific conventions exist within each trained population and are behaviorally powerful, but they are idiosyncratic: different seeds develop different internal protocols that do not transfer. We therefore describe the endpoint structure as three \emph{forms of message dependence} rather than three additive layers of benefit.
+These results support a layered reading of endpoint message dependence. Stable variable input in the message slots provides the largest benefit that transfers across seeds. Coarse shared summaries add modest regime-dependent value. Rich sender-specific conventions exist within each trained population and are behaviorally powerful, but they appear idiosyncratic: once the evaluation holds out entire seeds, richer sender-pattern features hurt rather than help prediction. We therefore describe the endpoint structure as three \emph{forms of message dependence} rather than three additive layers of benefit.
+
+## Communication requires temporal context {#sec-factorial}
+
+The preceding analyses characterize what the frozen endpoint policy does with message input. A separate question is whether the communication benefit at training time depends on agents having access to temporal observation features, or whether messages can substitute for missing history. We address this with a from-scratch $2 \times 2$ factorial crossing communication (on/off) with temporal history features (full/reduced), training 15 seeds per cell. In the \emph{full history} condition, agents observe the EWMA cooperation rate, their own last action, and the lagged group cooperation fraction alongside the noisy private signal and messages. In the \emph{reduced history} condition, these temporal features are removed, leaving only the private signal and (if applicable) messages.
+
+```{python}
+#| echo: false
+#| output: asis
+cells = [
+    ("with_comm_full_history", "comm + full history"),
+    ("with_comm_reduced_history", "comm + reduced history"),
+    ("without_comm_full_history", "no-comm + full history"),
+    ("without_comm_reduced_history", "no-comm + reduced history"),
+]
+lines = [
+    r"\begin{table}[t]",
+    r"  \caption{Communication $\times$ history factorial at 150k. Each cell is trained from scratch with 15 seeds. Message sensitivity is the KL divergence between the agent's action distribution under natural messages vs.\ sender-shuffled messages (larger values mean the policy changes more when messages are scrambled).}\label{tab:factorial}",
+    r"  \centering",
+    r"  \small",
+    r"  \begin{tabular}{lcc}",
+    r"    \toprule",
+    r"    Cell & $f=3.5$ & $f=5.0$ \\",
+    r"    \midrule",
+]
+for cell_key, cell_label in cells:
+    c35 = fmt_pct_pm(
+        factorial_value(cell_key, "3.5", "mean_coop_rate"),
+        factorial_value(cell_key, "3.5", "sem_coop_rate"),
+    )
+    c50 = fmt_pct_pm(
+        factorial_value(cell_key, "5.0", "mean_coop_rate"),
+        factorial_value(cell_key, "5.0", "sem_coop_rate"),
+    )
+    lines.append(f"    {cell_label} & {math_text(c35)} & {math_text(c50)} \\\\")
+lines.append(r"    \midrule")
+resp_full = factorial_value("with_comm_full_history", "comm_responsiveness_kl", "mean_coop_rate")
+resp_full_sem = factorial_value("with_comm_full_history", "comm_responsiveness_kl", "sem_coop_rate")
+resp_red = factorial_value("with_comm_reduced_history", "comm_responsiveness_kl", "mean_coop_rate")
+resp_red_sem = factorial_value("with_comm_reduced_history", "comm_responsiveness_kl", "sem_coop_rate")
+kl_full_cell = math_text(f"{fmt_num(resp_full, 3)} \\pm {fmt_num(resp_full_sem, 3)}")
+kl_red_cell = math_text(f"{fmt_num(resp_red, 3)} \\pm {fmt_num(resp_red_sem, 3)}")
+lines.append(
+    f"    Message sensitivity (full) & \\multicolumn{{2}}{{c}}{{{kl_full_cell}}} \\\\"
+)
+lines.append(
+    f"    Message sensitivity (reduced) & \\multicolumn{{2}}{{c}}{{{kl_red_cell}}} \\\\"
+)
+lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
+print("\n".join(lines))
+```
+
+```{python}
+#| echo: false
+#| output: asis
+comm_adv_full_35 = factorial_value("with_comm_full_history", "3.5", "mean_coop_rate") - factorial_value("without_comm_full_history", "3.5", "mean_coop_rate")
+comm_adv_full_50 = factorial_value("with_comm_full_history", "5.0", "mean_coop_rate") - factorial_value("without_comm_full_history", "5.0", "mean_coop_rate")
+comm_adv_red_35 = factorial_value("with_comm_reduced_history", "3.5", "mean_coop_rate") - factorial_value("without_comm_reduced_history", "3.5", "mean_coop_rate")
+comm_adv_red_50 = factorial_value("with_comm_reduced_history", "5.0", "mean_coop_rate") - factorial_value("without_comm_reduced_history", "5.0", "mean_coop_rate")
+print(
+    f"The interaction is clear in Table~\\ref{{tab:factorial}}. Under full history, communication provides a clear advantage: {pp_math(comm_adv_full_35)} at $f=3.5$ and {pp_math(comm_adv_full_50)} at $f=5.0$. Under reduced history, the advantage essentially vanishes: {pp_math(comm_adv_red_35)} at $f=3.5$ and {pp_math(comm_adv_red_50)} at $f=5.0$. This is a strong interaction, not a main effect of communication."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    f"Message sensitivity confirms the pattern: larger KL means the policy shifts more when messages are scrambled. Under full history, the mean KL is {math_text(fmt_num(resp_full, 3))}; under reduced history it drops to {math_text(fmt_num(resp_red, 3))}. Agents trained without temporal features do not learn to compensate by attending more to messages. Instead, they largely ignore the message channel because messages alone do not carry enough context to support conditional cooperation strategies."
+)
+```
+
+The factorial therefore establishes that communication's training-time value is not intrinsic to the channel. It depends on agents having enough temporal observation context to integrate message input into regime-dependent decisions. Messages complement temporal history; they do not substitute for it.
 
 # Discussion {#sec-discussion}
 
-The results support three broad conclusions.
-
-First, the descriptive communication gap is positive and grows over training at both focal regimes. Communication-trained agents cooperate more than no-communication agents, and the advantage widens from 50k to 150k. Because the two conditions are separately trained, this gap reflects both message-conditioned learning and broader training-path differences. It serves as motivation for the more targeted analyses that follow.
+Taken together, the results paint a picture in which communication is useful but not in the way the emergent-communication literature typically emphasizes. The message channel does help: agents trained with it cooperate substantially more than agents trained without it, and the frozen policy genuinely depends on its message input. But the learned protocol is not uniquely privileged. Random and shuffled replacements perform comparably at the endpoint, sender-specific conventions are seed-private rather than transferable, and the benefit disappears when agents lack temporal observation context.
 
 ```{python}
 #| echo: false
 #| output: asis
-d_abs_35 = pp_math(sender_overall('overall_all', '3.5')['mean_abs_delta_p_cooperate'])
-d_abs_50 = pp_math(sender_overall('overall_all', '5.0')['mean_abs_delta_p_cooperate'])
-tt_pm2 = tex_tt("public_marginal")
+agg_eff = pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semantics_value('150000', 'aggregate_signed_sem'))
+sender_eff = abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))
 print(
-    f"Second, the endpoint channel is genuinely used but not uniquely privileged. Natural messages beat the no-communication baseline and most coarse replacements, and single-slot sender interventions produce mean absolute effects of about {d_abs_35} at $f=3.5$ and {d_abs_50} at $f=5.0$. At the same time, several shuffled or random replacements remain close to the natural stream, and a constant token of 1 slightly outperforms the learned protocol at $f=5.0$. The token-rate-matched {tt_pm2} control shows that matching the aggregate frequency distribution does not explain the residual benefit of learned messages."
+    f"The three forms of message dependence clarify what is doing the work. Stable variable input---simply having a non-constant, varying signal in the message slots---provides the largest cooperation benefit that transfers across seeds. Coarse summaries (how many senders sent 1) add smaller, regime-dependent value. Rich sender-specific conventions are behaviorally powerful within a seed but cancel in the aggregate: by 150k, the pooled any-token effect is only {agg_eff}, while per-sender effects remain {sender_eff} (Appendix~\\ref{{app:alignment}}). The conventions are real, but they are private agreements---different seeds develop incompatible protocols."
 )
 ```
 
-```{python}
-#| echo: false
-#| output: asis
-tt_at2 = tex_tt("any_token")
-d_at_35 = pp_math(any_token_delta('3.5'))
-d_at_50 = pp_math(any_token_delta('5.0'))
-print(
-    f"Third, the low-dimensional mechanism analysis decomposes endpoint message dependence into three forms. Across seeds, coarse summaries carry most of the stable benefit: at $f=3.5$, {tt_at2} moves cooperation by only {d_at_35}; at $f=5.0$, it helps more ({d_at_50}), but the count response is still non-monotone. Within a trained seed, richer sender-indexed patterns matter strongly, yet grouped cross-seed surrogate models perform worse when given richer sender-pattern features. The strongest current reading is therefore that \\emph{{stable variable signal input}} matters most, \\emph{{coarse shared structure}} adds smaller regime-dependent value, and the richest \\emph{{sender-specific conventions}} are seed-private rather than a portable shared code."
-)
-```
+The standard framing in emergent communication research asks whether agents develop a meaningful shared protocol [@lazaridou2017multi; @kottur2017natural; @lowe2019pitfalls]. Our results suggest a different lens. The portable benefit in this environment does not require a shared protocol---it is better understood as a \emph{correlation device} [@aumann1974subjectivity; @duffy2017sunspots]: an exogenous or learned source of shared variation that agents can condition on jointly, without needing to agree on what the tokens "mean." This contrasts with the cheap-talk framing [@crawford1982strategic], where value comes from credible sender-chosen information transmission. The factorial adds a further qualification: even this correlation-device benefit requires agents to have temporal observation context. Without history features, agents cannot ground the variable input in regime-dependent decisions, and the channel becomes useless.
 
-Appendix~\ref{app:alignment} sharpens this point. By 150k, the aggregate observational any-token effect is only about {pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semantics_value('150000', 'aggregate_signed_sem'))}, while the corresponding per-sender absolute effect remains {abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))}. The aggregate can therefore look weak because sender-conditioned conventions cancel in the mean, not because sender-conditioned structure is absent.
-
-This three-part decomposition has an important implication. In the emergent communication literature, the standard evaluation target is whether agents develop a meaningful shared protocol [@lazaridou2017multi; @kottur2017natural; @lowe2019pitfalls]. Our results suggest that in this environment, the portable cross-seed benefit does not require a shared protocol. The dominant factor is the presence of stable variable input---what might be better understood as a correlation device [@aumann1974subjectivity; @duffy2017sunspots] than as learned cheap talk in the Crawford--Sobel sense [@crawford1982strategic]. Rich sender-specific conventions do emerge within each trained population, but they are private agreements rather than a generalizable language.
-
-\emph{The central claim is therefore: in this hidden-regime social dilemma under independent learning, portable learned semantics are not the dominant driver of the endpoint cooperation benefit. Stable variable signal input is.}
+\emph{The central claim is therefore: in this hidden-regime social dilemma under independent learning, portable learned semantics are not the dominant driver of the cooperation benefit. Stable variable input in the message channel is---but only when agents have the temporal observation scaffold that allows them to integrate that input into context-dependent decisions.}
 
 ## Limitations
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
-  \item The main-text results characterize endpoint message dependence via frozen-policy interventions, not the training-time value of communication. Preliminary from-scratch exogenous-channel training results (Appendix~\ref{app:exogenous}) suggest that variable stochastic channels can match or exceed learned communication, but those runs used a different auxiliary-loss configuration and are therefore not yet directly comparable to the base learned condition. Matched-loss reruns are in progress.
+  \item Apart from the communication $\times$ history factorial, the main-text results characterize endpoint message dependence via frozen-policy interventions, not the full training-time value of communication. Preliminary from-scratch exogenous-channel training results (Appendix~\ref{app:exogenous}) initially suggested that uniform random channels outperform learned communication at both focal regimes, but a matched loss-switch control revealed that the original exogenous runs used a different auxiliary-loss configuration, inflating the apparent advantage by up to $16\pp$ at $f=3.5$. Under matched training objectives, uniform modestly exceeds the learned baseline only at $f=5.0$ ($+7.6\pp$, exact sign-flip permutation test $p=0.154$, where the test counts the fraction of seed-label permutations under which the observed mean difference would be equalled or exceeded). The comparison remains provisional due to a hybrid forced-channel implementation.
   \item The convention non-portability claim rests on grouped cross-seed surrogate models rather than on direct behavioral cross-play tests. Cross-play experiments would provide a more direct test of whether conventions transfer across independently trained populations.
   \item This is a single-game, four-agent, binary-vocabulary case study. Generalization to larger vocabularies, more agents, or different social dilemmas remains open.
 \end{enumerate}
 ```
 
-# References
-
+```{=latex}
+\clearpage
 \appendix
+\section*{Appendix}
+```
 
-# Appendix: Aggregate cancellation and polarity alignment {#app:alignment}
+# Aggregate cancellation and polarity alignment {#app:alignment}
 
 The frozen sender-specific interventions in the main text are interventional endpoint tests. This appendix adds the descriptive complement: natural receiver- and sender-semantics summaries can look weak in the aggregate even when sender-conditioned structure remains strong.
 
@@ -1387,7 +1589,7 @@ print(
 )
 ```
 
-# Appendix: Observation-noise sweep {#app:noise}
+# Observation-noise sweep {#app:noise}
 
 The noise sweep tests whether the communication advantage changes when private signal quality varies at evaluation time. Agents were trained at $\sigma = 0.5$; we evaluate at $\sigma \in \{0.0, 0.25, 0.5, 1.0\}$.
 
@@ -1436,7 +1638,7 @@ print("\n".join(lines))
 
 At $f=5.0$, the communication advantage grows monotonically with evaluation-time noise, consistent with messages carrying genuine regime-relevant information: when private signals are less reliable, receivers benefit more from the message channel.
 
-# Appendix: Message--history interaction grid {#app:history}
+# Message--history interaction grid {#app:history}
 
 The message--history grid crosses 9 message conditions with 8 history-feature ablations at 150k, asking how cooperation changes when temporal observation features are zeroed or clamped.
 
@@ -1450,7 +1652,7 @@ print(
 
 The interaction between message and history ablations shows that messages and temporal features are partial substitutes: when one information source is removed, agents lean harder on the other. Messages are most valuable when temporal information is distorted.
 
-# Appendix: Same-checkpoint continuation controls {#app:continuation}
+# Same-checkpoint continuation controls {#app:continuation}
 
 The continuation controls branch from a shared checkpoint and continue training with an altered message channel. Because every branch starts from a checkpoint trained with learned messages, alternative channels are evaluated under a prior policy that already "expects" learned-message statistics. Additionally, all continuation branches used zeroed auxiliary communication losses (\texttt{sign\_lambda}=0, \texttt{list\_lambda}=0), whereas the base learned condition used 0.1 for both. Comparisons against the learned reference should therefore be read as sensitivity to channel structure rather than as symmetric pairwise contrasts.
 
@@ -1471,16 +1673,16 @@ print(
 )
 ```
 
-# Appendix: Preliminary from-scratch exogenous controls {#app:exogenous}
+# Preliminary from-scratch exogenous controls {#app:exogenous}
 
-From-scratch exogenous controls train with different channel types from episode 0 rather than branching from a learned checkpoint. These results are preliminary because the exogenous training path used a different auxiliary-loss configuration (\texttt{sign\_lambda}=0.0, \texttt{list\_lambda}=0.0) than the base learned condition (0.1 for both). The auxiliary losses---a message-entropy regularizer and a listening bonus---were designed to support communication learning; their absence in the exogenous conditions creates a training-objective confound that prevents clean comparison of channel types against the learned baseline.
+From-scratch exogenous controls train with different channel types from episode 0 rather than branching from a learned checkpoint. The original exogenous runs used a different auxiliary-loss configuration (\texttt{sign\_lambda}=0.0, \texttt{list\_lambda}=0.0) than the base learned condition (0.1 for both). A matched loss-switch control has since quantified this confound: zeroing the auxiliary losses while keeping learned messages costs $-16.0\pp$ at $f=3.5$ and $-4.7\pp$ at $f=5.0$ relative to the base learned condition. The original exogenous comparison therefore conflated channel-type differences with auxiliary-loss differences.
 
 ```{python}
 #| echo: false
 #| output: asis
 lines = [
     r"\begin{table}[h]",
-    r"  \caption{Preliminary from-scratch exogenous controls at 150k (15 seeds). These results are not directly comparable to the learned baseline due to a training-objective confound (see text). Matched-loss reruns are in progress.}\label{tab:exogenous}",
+    r"  \caption{From-scratch exogenous controls at 150k (15 seeds). These runs used zeroed auxiliary communication losses; a matched loss-switch control has since quantified the resulting confound (see text).}\label{tab:exogenous}",
     r"  \centering",
     r"  \small",
     r"  \begin{tabular}{lcccc}",
@@ -1501,4 +1703,28 @@ lines.extend([r"    \bottomrule", r"  \end{tabular}", r"\end{table}"])
 print("\n".join(lines))
 ```
 
-Despite the confound, the qualitative pattern is suggestive: variable stochastic channels (uniform, public\_random) cooperate more than constant channels (fixed0, fixed1), and constant channels can fall below the no-communication baseline. Whether uniform training genuinely outperforms learned communication under matched auxiliary-loss settings is the subject of ongoing matched-loss reruns.
+Despite the confound, the qualitative pattern is suggestive: variable stochastic channels (uniform, public\_random) cooperate more than constant channels (fixed0, fixed1), and constant channels can fall below the no-communication baseline.
+
+```{python}
+#| echo: false
+#| output: asis
+ls_base_35 = lossswitch_value("none_base", 150000, "3.500", "mean_coop_rate")
+ls_base_50 = lossswitch_value("none_base", 150000, "5.000", "mean_coop_rate")
+ls_zero_35 = lossswitch_value("none_zeroaux", 150000, "3.500", "mean_coop_rate")
+ls_zero_50 = lossswitch_value("none_zeroaux", 150000, "5.000", "mean_coop_rate")
+ls_unif_35 = lossswitch_value("uniform_zeroaux", 150000, "3.500", "mean_coop_rate")
+ls_unif_50 = lossswitch_value("uniform_zeroaux", 150000, "5.000", "mean_coop_rate")
+d_zero_35 = pp_math(ls_zero_35 - ls_base_35)
+d_zero_50 = pp_math(ls_zero_50 - ls_base_50)
+d_unif_35 = pp_math(ls_unif_35 - ls_base_35)
+d_unif_50 = pp_math(ls_unif_50 - ls_base_50)
+p_unif_50 = fmt_num(lossswitch_paired_value("uniform_zeroaux", 150000, "5.000", "sign_flip_p_value"), 4)
+print(
+    f"A matched loss-switch control quantifies the confound. Under the base learned objective, cooperation reaches {pct_math(ls_base_35)} at $f=3.5$ and {pct_math(ls_base_50)} at $f=5.0$. With zeroed auxiliary losses but the same learned messages, cooperation falls to {pct_math(ls_zero_35)} and {pct_math(ls_zero_50)} ({d_zero_35} and {d_zero_50}). Under matched zero-aux training with uniform exogenous messages, cooperation is {pct_math(ls_unif_35)} at $f=3.5$ and {pct_math(ls_unif_50)} at $f=5.0$, or {d_unif_35} and {d_unif_50} relative to the base learned condition (sign-flip $p={p_unif_50}$ at $f=5.0$). Uniform therefore modestly exceeds the learned baseline only at $f=5.0$ under matched training objectives; the original apparent advantage at $f=3.5$ was driven by the auxiliary-loss difference."
+)
+```
+
+```{=latex}
+\clearpage
+\section*{References}
+```
