@@ -1,5 +1,6 @@
 from pathlib import Path
 
+import pytest
 import torch
 
 from src.experiments_pgg_v0.train_ppo import (
@@ -100,6 +101,47 @@ def test_resume_ckpt_restores_optimizer_and_episode_offset(tmp_path: Path):
     resumed_payload = torch.load(resumed_ckpt, map_location="cpu")
     assert resumed_payload["config"]["episode_offset"] == 1
     assert resumed_payload["training_state"]["abs_episode"] == 2
+
+
+def test_resume_ckpt_rejects_legacy_weight_only_checkpoint(tmp_path: Path):
+    ckpt = tmp_path / "cond2_seed904.pt"
+    cfg = minimal_test_config(
+        n_agents=4,
+        n_episodes=2,
+        T=4,
+        comm_enabled=False,
+        n_senders=0,
+        seed=904,
+        save_path=str(ckpt),
+        condition_name="cond2",
+        checkpoint_interval=1,
+    )
+    train(cfg)
+
+    ep1 = tmp_path / "cond2_seed904_ep1.pt"
+    legacy_payload = torch.load(ep1, map_location="cpu")
+    legacy_payload.pop("checkpoint_state_version", None)
+    legacy_payload.pop("training_state", None)
+    for agent_state in legacy_payload["agents"].values():
+        agent_state.pop("optimizer", None)
+
+    legacy_ckpt = tmp_path / "cond2_seed904_legacy.pt"
+    torch.save(legacy_payload, legacy_ckpt)
+
+    resumed_ckpt = tmp_path / "cond2_seed904_resumed.pt"
+    resumed_cfg = minimal_test_config(
+        n_agents=4,
+        n_episodes=1,
+        T=4,
+        comm_enabled=False,
+        n_senders=0,
+        seed=904,
+        save_path=str(resumed_ckpt),
+        condition_name="cond2",
+        resume_ckpt=str(legacy_ckpt),
+    )
+    with pytest.raises(ValueError, match="checkpoint_state_version >= 2"):
+        train(resumed_cfg)
 
 
 def test_vectorized_count_env_episodes_preserves_episode_budget(tmp_path: Path):

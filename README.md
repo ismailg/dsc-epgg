@@ -1,85 +1,51 @@
 # MARL-EmeCom: Multi-Agent RL with Emergent Communication in Mixed-Motive Settings
 
 **Paper:** *Learning in Public Goods Games: The Effects of Uncertainty and Communication on Cooperation* (Orzan et al. 2025)  
-[📄 Read on SpringerLink](https://link.springer.com/article/10.1007/s00521-024-10530-6)
+[Read on SpringerLink](https://link.springer.com/article/10.1007/s00521-024-10530-6)
 
----
+## Current Repo Orientation
 
-## Overview
+This repository started from the broader `marl-emecom` codebase, but the active implementation and
+result family here is the newer vectorized DSC-EPGG pipeline.
 
-This project studies **emergent communication in multi-agent reinforcement learning (MARL)** under **mixed incentives** and **uncertainty**.  
-We extend the Public Goods Game into an **Extended Public Goods Game (EPGG)**, spanning cooperative, mixed, and competitive settings. The code reproduces the experiments from our paper.
+Use this repo for:
 
-Example Outcome:
+- the active `src/...` environment, PPO, checkpoint-suite, and analysis code
+- the newer straight `0 -> 150k` vectorized phase-3 family: `phase3_vecstraight`
+- the current paper-facing vecstraight follow-ups and result audits
 
-[W&B - 2-agent Experiments with Uncertainty and Communication](https://wandb.ai/nicoleorzan/2agents_comm[1,%200]_list[0,%201]_noGmm_unc[0.0,%202.0]_mfact[0.5,%201.5,%202.5,%203.5]_algo_reinforce_BEST/reports/Extended-Public-Goods-Games-Communication-and-Uncertainty--VmlldzoxNDU1NTkzOQ).
+Do not mix this with the older staged/warm-start phase-3 manuscript family in the sibling repo:
 
-**Key findings:**  
-- Communication supports cooperation under **symmetric uncertainty**.  
-- Under **asymmetric uncertainty**, agents may exploit communication.  
-- Agents trained across multiple incentive environments learn richer strategies that **generalize** better to unseen settings.
-
-## Current Data Location Guide
-
-This repo now contains the newer straight vectorized phase-3 result family. It should be read
-alongside the older staged/warm-start family in
-[`/Users/mbp17/POSTDOC/NPS26/dsc-epgg`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg), not confused with it.
-
-Start with:
-
-- [`DATA_MAP.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/DATA_MAP.md)
 - [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md)
 
-Use the following rule:
+## Read First
 
-- `phase3_vecstraight` = the newer straight `0->150k` vectorized family in this repo
-- `phase3_staged` = the older manuscript-facing family in `dsc-epgg`
-- never reuse intervention or mechanism claims across those families unless the analysis was rerun
-  on the target family
+For current work, start with:
 
-## Project Features & Repository Structure
+- [`DATA_MAP.md`](DATA_MAP.md): canonical artifact locations and fetch conventions
+- [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md): short handoff note and current gating status
+- [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md): active manuscript-facing checklist
+- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md): cross-repo family split
 
-- **Environments**: Extended Public Goods Game (EPGG) with cooperative/mixed/competitive incentives.    
-- **Uncertainty**: noisy observations of the incentive factor (Gaussian).
-- **Emergent communication**: discrete (“cheap talk”) messages before acting.  
-- **Algorithms**:  
-  - **REINFORCE** (policy gradient)
-  - **DQN** (deep Q-learning)  
-- **Uncertainty modelling**: agents can optionally maintain a **Gaussian Mixture Model (GMM)** to infer hidden incentive structure.
+Use the following rule everywhere:
 
-**Code structure**:
-- [`/envs`](envs): Extended Public Goods Game (EPGG) environments.
-- [`/agents`](agents): Implementations of REINFORCE and DQN agents.
-- [`/comm`](comm): Modules for emergent communication channels.
-- [`/analysis`](analysis): Scripts for metrics (mutual information, speaker consistency, coordination).
-- [`/experiments`](experiments): Configurations and training scripts to reproduce paper results.
+- `phase3_vecstraight` = the newer straight vectorized family in this repo
+- `phase3_staged` = the older staged/warm-start manuscript family in `dsc-epgg`
+- do not port intervention or mechanism claims across those families unless the analysis was rerun
 
+## Active Code Map
 
-## Getting Started / Implementation
+The current implementation lives under `src`, not the older upstream top-level layout.
 
-### 1. Clone & Dependencies
+- `src/environments/pgg/`: vectorized PGG environments
+- `src/wrappers/`: trainer-side observation wrapper and message/history features
+- `src/algos/`: PPO, GAE buffer, policy/value code
+- `src/experiments_pgg_v0/`: training launchers and seed-expansion runners
+- `src/analysis/`: checkpoint suites, summaries, validation, and reporting helpers
+- `outputs/eval/`: local analysis outputs and summaries
+- `iwr-results/` and `hetzner-results/`: fetched remote mirrors
 
-```bash
-git clone https://github.com/nicoleorzan/marl-emecom.git
-cd marl-emecom
-pip install -r requirements.txt
-```
-(The use of a virtual environment is suggested)
+## Historical Notes
 
-### 2. Training Agents
-
-You can train agents either:
-- Without communication
-- With communication (a subset of agents sends discrete messages before action)
-
-Example usage:
-
-The launcher sets parameters inside `src/experiments_pgg_v0/caller_given_params.py`; you can edit them there, or pass them as input:
-```
-python caller_given_params.py --n_agents 2 --mult_fact 0.5 1.5 2.5 --uncertainties 0 0 --communicating_agents 1 1 --listening_agents 1 1 --gmm_ 0 --algorithm reinforce
-```
-
-Base run:
-```
-python src/experiments_pgg_v0/caller_given_params.py
-```
+- [`README_IMPLEMENTATION.md`](README_IMPLEMENTATION.md) is a historical Week 1-2 implementation plan. It is useful for the original staged implementation scope, but it is not the main entry point for current vecstraight phase-3 work.
+- Some older upstream terminology and directory references still appear in parts of the repo. When they disagree with the current phase-3 docs above, prefer the current `src/...` layout and the vecstraight-specific Markdown files.

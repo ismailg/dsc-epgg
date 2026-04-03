@@ -6,6 +6,19 @@ import numpy as np
 import torch
 
 
+_HISTORY_MODE_CHOICES = ("full", "reduced")
+
+
+def _canonical_history_mode(history_mode: str) -> str:
+    mode = str(history_mode or "full").strip().lower() or "full"
+    if mode not in _HISTORY_MODE_CHOICES:
+        raise ValueError(
+            "unknown history_mode="
+            f"{history_mode!r}; expected one of: {','.join(_HISTORY_MODE_CHOICES)}"
+        )
+    return mode
+
+
 class ObservationWrapper:
     """
     Trainer-side wrapper that builds Set-A observations from raw env tensors,
@@ -23,6 +36,7 @@ class ObservationWrapper:
         msg_dropout: float = 0.1,
         default_endowment: float = 4.0,
         msg_marginal_alpha: float = 0.01,
+        history_mode: str = "full",
     ) -> None:
         self.n_agents = int(n_agents)
         self.ewma_decay = float(ewma_decay)
@@ -32,6 +46,7 @@ class ObservationWrapper:
         self.msg_dropout = float(msg_dropout)
         self.default_endowment = float(default_endowment)
         self.msg_marginal_alpha = float(msg_marginal_alpha)
+        self.history_mode = _canonical_history_mode(history_mode)
 
         if sender_ids is not None:
             self.sender_ids = list(sender_ids)
@@ -120,8 +135,11 @@ class ObservationWrapper:
         agent_id: str,
         raw_env_obs,
         messages: Optional[Dict[str, int]] = None,
+        f_hat_override: Optional[float] = None,
     ) -> np.ndarray:
         raw = self._canonicalize_raw_obs(raw_env_obs)
+        if f_hat_override is not None:
+            raw["f_hat"] = float(f_hat_override)
 
         obs = [
             raw["f_hat"],
@@ -139,7 +157,10 @@ class ObservationWrapper:
                 onehot[msg_val] = 1.0
                 obs.extend(onehot.tolist())
 
-        return np.asarray(obs, dtype=np.float32)
+        obs_arr = np.asarray(obs, dtype=np.float32)
+        if self.history_mode == "reduced":
+            obs_arr[self.temporal_feature_slice] = 0.0
+        return obs_arr
 
     @property
     def obs_dim(self) -> int:
@@ -152,3 +173,19 @@ class ObservationWrapper:
     def message_start_idx(self) -> int:
         # Base Set-A fields before message one-hot blocks.
         return 5
+
+    @property
+    def last_coop_idx(self) -> int:
+        return 2
+
+    @property
+    def own_last_action_idx(self) -> int:
+        return 3
+
+    @property
+    def ewma_coop_idx(self) -> int:
+        return 4
+
+    @property
+    def temporal_feature_slice(self) -> slice:
+        return slice(self.last_coop_idx, self.ewma_coop_idx + 1)

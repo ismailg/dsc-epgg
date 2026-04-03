@@ -3,15 +3,20 @@ project:
   output-dir: _output
 
 format:
-  acm-pdf:
-    classoption: [manuscript, review, anonymous]
-    acm-journal: PACMHCI
+  pdf:
+    documentclass: article
+    pdf-engine: xelatex
     keep-tex: true
     toc: false
     number-sections: true
     colorlinks: true
-    cite-method: citeproc
-    csl: _extensions/quarto-journals/acm/acm-sigchi-proceedings.csl
+    cite-method: natbib
+    biblio-style: plainnat
+    template-partials:
+      - title.tex
+    include-in-header:
+      - text: |
+          \usepackage{neurips_2025}
 
 bibliography: refs.bib
 engine: jupyter

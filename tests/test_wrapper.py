@@ -63,3 +63,15 @@ def test_history_features_lag():
     assert abs(float(obs1[2]) - 0.5) < 1e-6
     assert int(obs1[3]) == 1
 
+
+def test_reduced_history_mode_masks_temporal_slice_but_preserves_shape():
+    wrapper = ObservationWrapper(n_agents=4, history_mode="reduced")
+    wrapper.reset(["agent_0", "agent_1", "agent_2", "agent_3"])
+    wrapper.update({"agent_0": 1, "agent_1": 1, "agent_2": 0, "agent_3": 0})
+
+    obs = wrapper.build_obs("agent_0", np.array([2.0, 4.0], dtype=np.float32))
+
+    assert obs.shape == (wrapper.obs_dim,)
+    assert float(obs[0]) == 2.0
+    assert float(obs[1]) == 4.0
+    assert np.allclose(obs[wrapper.temporal_feature_slice], 0.0)

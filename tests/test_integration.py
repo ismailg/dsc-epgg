@@ -76,3 +76,53 @@ def test_full_loop_runs_vectorized_subproc(tmp_path):
     assert (tmp_path / "agents_vec_subproc.pt").exists()
     assert all(int(row["num_envs"]) == 2 for row in metrics)
     assert all(int(row["steps"]) == 10 for row in metrics)
+
+
+def test_train_exposes_timing_metrics(tmp_path):
+    cfg = minimal_test_config(
+        n_episodes=2,
+        T=5,
+        num_envs=2,
+        env_backend="serial",
+        save_path=str(tmp_path / "agents_timing.pt"),
+        seed=777,
+    )
+    metrics = train(cfg)
+
+    timing_keys = [
+        "episode_wall_s",
+        "episode_other_s",
+        "session_log_wall_s",
+        "update_wall_s",
+        "rollout_wall_s",
+        "rollout_other_s",
+        "rollout_reset_s",
+        "rollout_obs_build_s",
+        "rollout_message_policy_s",
+        "rollout_message_postprocess_s",
+        "rollout_action_policy_s",
+        "rollout_diag_s",
+        "rollout_env_step_s",
+        "rollout_buffer_store_s",
+        "rollout_bootstrap_value_s",
+        "rollout_gae_s",
+        "rollout_flatten_s",
+        "episode_steps_per_s",
+        "rollout_steps_per_s",
+        "update_steps_per_s",
+        "episode_agent_steps_per_s",
+    ]
+
+    assert len(metrics) == 2
+    for row in metrics:
+        for key in timing_keys:
+            assert key in row
+            assert np.isfinite(float(row[key]))
+            assert float(row[key]) >= 0.0
+        assert float(row["episode_steps_per_s"]) > 0.0
+        assert float(row["episode_agent_steps_per_s"]) > 0.0
+        assert float(row["episode_wall_s"]) + 1e-9 >= (
+            float(row["rollout_wall_s"])
+            + float(row["update_wall_s"])
+            + float(row["session_log_wall_s"])
+        )

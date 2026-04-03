@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+from collections import deque
+from contextlib import contextmanager
 import datetime
 import json
 import math
@@ -9,7 +11,8 @@ import random
 import subprocess
 import sys
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+import time
+from typing import Deque, Dict, List, Optional
 
 import numpy as np
 import torch
@@ -60,6 +63,8 @@ class TrainConfig:
     vocab_size: int = 2
     msg_dropout: float = 0.1
     msg_training_intervention: str = "none"
+    msg_training_history_len: int = 4096
+    history_mode: str = "full"
     episode_offset: int = 0
     schedule_total_episodes: int = 0
 
@@ -108,6 +113,47 @@ class TrainConfig:
     mi_null_perms: int = 200
     mi_alpha: float = 0.05
     log_trainer_responsiveness: bool = True
+
+
+_ROLLOUT_TIMING_COMPONENT_KEYS = (
+    "rollout_reset_s",
+    "rollout_obs_build_s",
+    "rollout_message_policy_s",
+    "rollout_message_postprocess_s",
+    "rollout_action_policy_s",
+    "rollout_diag_s",
+    "rollout_env_step_s",
+    "rollout_buffer_store_s",
+    "rollout_bootstrap_value_s",
+    "rollout_gae_s",
+    "rollout_flatten_s",
+)
+
+
+def _new_rollout_timing() -> Dict[str, float]:
+    timing = {key: 0.0 for key in _ROLLOUT_TIMING_COMPONENT_KEYS}
+    timing["rollout_wall_s"] = 0.0
+    return timing
+
+
+@contextmanager
+def _accumulate_time(timing: Dict[str, float], key: str):
+    started_at = time.perf_counter()
+    try:
+        yield
+    finally:
+        timing[key] = float(timing.get(key, 0.0)) + (time.perf_counter() - started_at)
+
+
+def _safe_per_sec(count: float, elapsed_s: float) -> float:
+    if float(elapsed_s) <= 0.0 or not math.isfinite(float(elapsed_s)):
+        return 0.0
+    return float(count) / float(elapsed_s)
+
+
+def _rollout_other_time(timing: Dict[str, float]) -> float:
+    accounted = sum(float(timing.get(key, 0.0)) for key in _ROLLOUT_TIMING_COMPONENT_KEYS)
+    return max(0.0, float(timing.get("rollout_wall_s", 0.0)) - accounted)
 
 
 def minimal_test_config(**overrides):
@@ -275,6 +321,7 @@ def _apply_training_message_intervention(
     intervention: str,
     delivered: Dict[str, int],
     vocab_size: int,
+    sender_history: Optional[Dict[str, Deque[int]]] = None,
 ) -> Dict[str, int]:
     mode = str(intervention or "none").strip().lower()
     out = {sender_id: int(msg) for sender_id, msg in delivered.items()}
@@ -294,10 +341,30 @@ def _apply_training_message_intervention(
         if int(vocab_size) < 2:
             raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
         return {sender_id: 1 for sender_id in out.keys()}
+    if mode == "sender_shuffle":
+        if sender_history is None:
+            raise ValueError("msg_training_intervention=sender_shuffle requires sender_history")
+        shuffled = {}
+        for sender_id, msg in out.items():
+            history = sender_history.get(sender_id)
+            if history is None or len(history) == 0:
+                shuffled[sender_id] = int(msg)
+                continue
+            idx = int(np.random.randint(0, len(history)))
+            shuffled[sender_id] = int(history[idx])
+        return shuffled
     raise ValueError(
         "unknown msg_training_intervention="
-        f"{intervention!r}; expected one of: none,uniform,public_random,fixed0,fixed1"
+        f"{intervention!r}; expected one of: none,uniform,public_random,fixed0,fixed1,sender_shuffle"
     )
+
+
+def _update_training_message_history(
+    sender_history: Dict[str, Deque[int]],
+    natural_messages: Dict[str, int],
+) -> None:
+    for sender_id, msg in natural_messages.items():
+        sender_history.setdefault(str(sender_id), deque()).append(int(msg))
 
 
 def _set_agents_lr(agents: Dict[str, PPOAgentV2], lr_value: float):
@@ -386,6 +453,7 @@ def _build_wrapper(cfg: TrainConfig, sender_ids: List[str]):
         vocab_size=cfg.vocab_size,
         msg_dropout=cfg.msg_dropout,
         default_endowment=cfg.endowment,
+        history_mode=cfg.history_mode,
     )
 
 
@@ -485,6 +553,12 @@ def _maybe_resume_agents(agents: Dict[str, PPOAgentV2], resume_ckpt: str) -> Dic
     if not os.path.exists(ckpt):
         raise FileNotFoundError(f"resume_ckpt not found: {ckpt}")
     payload = torch.load(ckpt, map_location="cpu")
+    version = int(payload.get("checkpoint_state_version", 0) or 0) if isinstance(payload, dict) else 0
+    if version < 2:
+        raise ValueError(
+            "resume_ckpt requires a modern training checkpoint with "
+            "checkpoint_state_version >= 2. Use --init_ckpt for legacy weight-only checkpoints."
+        )
     saved_agents = payload.get("agents", {})
     for agent_id, agent in agents.items():
         if agent_id not in saved_agents:
@@ -591,9 +665,7 @@ def _collect_vectorized_rollout(
     sender_ids: List[str],
 ):
     n_envs = len(wrappers)
-    value_obs_dim = (5 + len(sender_ids) * cfg.vocab_size if cfg.comm_enabled else 5) + (
-        1 if cfg.value_time_feature else 0
-    )
+    value_obs_dim = wrappers[0].obs_dim + (1 if cfg.value_time_feature else 0)
     buffer = VectorizedTrajectoryBuffer(
         agent_ids=agent_ids,
         T=cfg.T,
@@ -604,10 +676,13 @@ def _collect_vectorized_rollout(
         vocab_size=cfg.vocab_size,
         sender_ids=sender_ids,
     )
+    rollout_timing = _new_rollout_timing()
+    rollout_started_at = time.perf_counter()
 
-    for wrapper in wrappers:
-        wrapper.reset(agent_ids)
-    raw_obs_batch = env_backend.reset_all()
+    with _accumulate_time(rollout_timing, "rollout_reset_s"):
+        for wrapper in wrappers:
+            wrapper.reset(agent_ids)
+        raw_obs_batch = env_backend.reset_all()
     current_messages_batch = [None for _ in range(n_envs)]
     done_batch = [False for _ in range(n_envs)]
     steps = 0
@@ -616,17 +691,27 @@ def _collect_vectorized_rollout(
         if (cfg.comm_enabled and len(sender_ids) > 0 and cfg.log_trainer_responsiveness)
         else {}
     )
+    sender_history_batch: List[Dict[str, Deque[int]]] = []
+    if cfg.comm_enabled and str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+        sender_history_batch = [
+            {
+                sender_id: deque(maxlen=max(1, int(cfg.msg_training_history_len)))
+                for sender_id in sender_ids
+            }
+            for _ in range(n_envs)
+        ]
 
     while not all(done_batch) and steps < cfg.T:
-        aug_obs_batch = [
-            {
-                agent_id: wrappers[env_idx].build_obs(
-                    agent_id, raw_obs_batch[env_idx][agent_id], current_messages_batch[env_idx]
-                )
-                for agent_id in agent_ids
-            }
-            for env_idx in range(n_envs)
-        ]
+        with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
+            aug_obs_batch = [
+                {
+                    agent_id: wrappers[env_idx].build_obs(
+                        agent_id, raw_obs_batch[env_idx][agent_id], current_messages_batch[env_idx]
+                    )
+                    for agent_id in agent_ids
+                }
+                for env_idx in range(n_envs)
+            ]
 
         message_actions_batch = [{} for _ in range(n_envs)]
         message_log_probs_batch = [{} for _ in range(n_envs)]
@@ -637,14 +722,19 @@ def _collect_vectorized_rollout(
                     [aug_obs_batch[env_idx][sender_id] for env_idx in range(n_envs)],
                     axis=0,
                 )
+                message_started_at = time.perf_counter()
                 msg_actions, msg_log_probs, _msg_entropy, _msg_probs = agents[
                     sender_id
                 ].sample_message_batch(sender_obs)
+                rollout_timing["rollout_message_policy_s"] += (
+                    time.perf_counter() - message_started_at
+                )
                 for env_idx in range(n_envs):
                     proposed_batch[env_idx][sender_id] = int(msg_actions[env_idx])
                     message_actions_batch[env_idx][sender_id] = int(msg_actions[env_idx])
                     message_log_probs_batch[env_idx][sender_id] = float(msg_log_probs[env_idx])
 
+            postprocess_started_at = time.perf_counter()
             for env_idx in range(n_envs):
                 dropped = wrappers[env_idx].apply_msg_dropout(proposed_batch[env_idx])
                 if str(cfg.msg_training_intervention).strip().lower() == "none":
@@ -652,24 +742,37 @@ def _collect_vectorized_rollout(
                         wrappers[env_idx].update_msg_marginals(sender_id, msg)
                     current_messages_batch[env_idx] = dropped
                 else:
-                    delivered = _apply_training_message_intervention(
-                        intervention=cfg.msg_training_intervention,
-                        delivered=dropped,
-                        vocab_size=cfg.vocab_size,
-                    )
+                    if str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+                        delivered = _apply_training_message_intervention(
+                            intervention=cfg.msg_training_intervention,
+                            delivered=dropped,
+                            vocab_size=cfg.vocab_size,
+                            sender_history=sender_history_batch[env_idx],
+                        )
+                        _update_training_message_history(sender_history_batch[env_idx], dropped)
+                    else:
+                        delivered = _apply_training_message_intervention(
+                            intervention=cfg.msg_training_intervention,
+                            delivered=dropped,
+                            vocab_size=cfg.vocab_size,
+                        )
                     for sender_id, msg in delivered.items():
                         wrappers[env_idx].update_msg_marginals(sender_id, msg)
                     current_messages_batch[env_idx] = delivered
+            rollout_timing["rollout_message_postprocess_s"] += (
+                time.perf_counter() - postprocess_started_at
+            )
 
-            aug_obs_batch = [
-                {
-                    agent_id: wrappers[env_idx].build_obs(
-                        agent_id, raw_obs_batch[env_idx][agent_id], current_messages_batch[env_idx]
-                    )
-                    for agent_id in agent_ids
-                }
-                for env_idx in range(n_envs)
-            ]
+            with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
+                aug_obs_batch = [
+                    {
+                        agent_id: wrappers[env_idx].build_obs(
+                            agent_id, raw_obs_batch[env_idx][agent_id], current_messages_batch[env_idx]
+                        )
+                        for agent_id in agent_ids
+                    }
+                    for env_idx in range(n_envs)
+                ]
 
         intended_actions_batch = [{} for _ in range(n_envs)]
         action_log_probs_batch = [{} for _ in range(n_envs)]
@@ -689,12 +792,14 @@ def _collect_vectorized_rollout(
                 [value_aug_obs_batch[env_idx][agent_id] for env_idx in range(n_envs)],
                 axis=0,
             )
+            action_started_at = time.perf_counter()
             action_vals, action_log_probs, value_vals, _action_entropy, _ = agents[
                 agent_id
             ].sample_action_batch(
                 obs_agent_batch,
                 value_obs_batch=value_obs_agent_batch,
             )
+            rollout_timing["rollout_action_policy_s"] += time.perf_counter() - action_started_at
 
             for env_idx in range(n_envs):
                 intended_actions_batch[env_idx][agent_id] = int(action_vals[env_idx])
@@ -702,6 +807,7 @@ def _collect_vectorized_rollout(
                 values_batch[env_idx][agent_id] = float(value_vals[env_idx])
 
             if cfg.comm_enabled and len(sender_ids) > 0:
+                diag_started_at = time.perf_counter()
                 device = agents[agent_id].action_actor.net[0].weight.device
                 obs_t = torch.tensor(obs_agent_batch, dtype=torch.float32, device=device)
                 probs_with = agents[agent_id].action_distribution(obs_t)
@@ -743,6 +849,7 @@ def _collect_vectorized_rollout(
                     responsiveness_updates[agent_id].extend(
                         [float(x) for x in kl_diag.detach().cpu().tolist()]
                     )
+                rollout_timing["rollout_diag_s"] += time.perf_counter() - diag_started_at
 
         raw_obs_next_batch = []
         rewards_raw_batch = []
@@ -752,9 +859,10 @@ def _collect_vectorized_rollout(
         true_f_batch = []
         done_out_batch = []
 
-        next_obs_batch, rewards_batch, done_result_batch, infos_batch = env_backend.step_batch(
-            intended_actions_batch
-        )
+        with _accumulate_time(rollout_timing, "rollout_env_step_s"):
+            next_obs_batch, rewards_batch, done_result_batch, infos_batch = env_backend.step_batch(
+                intended_actions_batch
+            )
         for env_idx in range(n_envs):
             raw_obs_next = next_obs_batch[env_idx]
             rewards_raw = _to_float_rewards(rewards_batch[env_idx])
@@ -778,60 +886,66 @@ def _collect_vectorized_rollout(
             true_f_batch.append(true_f)
             done_out_batch.append(bool(done))
 
-        buffer.store_step(
-            obs_batch=aug_obs_batch,
-            actions_batch=intended_actions_batch,
-            rewards_batch=rewards_train_batch,
-            raw_rewards_batch=rewards_raw_batch,
-            values_batch=values_batch,
-            log_probs_batch=action_log_probs_batch,
-            done_batch=done_out_batch,
-            executed_actions_batch=executed_actions_batch,
-            flips_batch=flips_batch,
-            true_f_batch=true_f_batch,
-            f_hats_batch=raw_obs_batch,
-            messages_batch=current_messages_batch,
-            value_obs_batch=value_aug_obs_batch,
-            message_actions_batch=message_actions_batch,
-            message_log_probs_batch=message_log_probs_batch,
-            listening_bonus_batch=listening_bonus_batch,
-        )
+        with _accumulate_time(rollout_timing, "rollout_buffer_store_s"):
+            buffer.store_step(
+                obs_batch=aug_obs_batch,
+                actions_batch=intended_actions_batch,
+                rewards_batch=rewards_train_batch,
+                raw_rewards_batch=rewards_raw_batch,
+                values_batch=values_batch,
+                log_probs_batch=action_log_probs_batch,
+                done_batch=done_out_batch,
+                executed_actions_batch=executed_actions_batch,
+                flips_batch=flips_batch,
+                true_f_batch=true_f_batch,
+                f_hats_batch=raw_obs_batch,
+                messages_batch=current_messages_batch,
+                value_obs_batch=value_aug_obs_batch,
+                message_actions_batch=message_actions_batch,
+                message_log_probs_batch=message_log_probs_batch,
+                listening_bonus_batch=listening_bonus_batch,
+            )
         raw_obs_batch = raw_obs_next_batch
         done_batch = done_out_batch
         steps += 1
 
-    if all(done_batch):
-        last_values = np.zeros((n_envs, cfg.n_agents), dtype=np.float32)
-    else:
-        final_aug_obs_batch = [
-            {
-                agent_id: wrappers[env_idx].build_obs(
-                    agent_id, raw_obs_batch[env_idx][agent_id], current_messages_batch[env_idx]
+    with _accumulate_time(rollout_timing, "rollout_bootstrap_value_s"):
+        if all(done_batch):
+            last_values = np.zeros((n_envs, cfg.n_agents), dtype=np.float32)
+        else:
+            with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
+                final_aug_obs_batch = [
+                    {
+                        agent_id: wrappers[env_idx].build_obs(
+                            agent_id, raw_obs_batch[env_idx][agent_id], current_messages_batch[env_idx]
+                        )
+                        for agent_id in agent_ids
+                    }
+                    for env_idx in range(n_envs)
+                ]
+            final_value_obs_batch = [
+                _build_value_aug_obs(final_aug_obs_batch[env_idx], steps, cfg, agent_ids)
+                for env_idx in range(n_envs)
+            ]
+            last_values = np.zeros((n_envs, cfg.n_agents), dtype=np.float32)
+            for agent_idx, agent_id in enumerate(agent_ids):
+                device = agents[agent_id].action_actor.net[0].weight.device
+                value_inputs = np.stack(
+                    [final_value_obs_batch[env_idx][agent_id] for env_idx in range(n_envs)],
+                    axis=0,
                 )
-                for agent_id in agent_ids
-            }
-            for env_idx in range(n_envs)
-        ]
-        final_value_obs_batch = [
-            _build_value_aug_obs(final_aug_obs_batch[env_idx], steps, cfg, agent_ids)
-            for env_idx in range(n_envs)
-        ]
-        last_values = np.zeros((n_envs, cfg.n_agents), dtype=np.float32)
-        for agent_idx, agent_id in enumerate(agent_ids):
-            device = agents[agent_id].action_actor.net[0].weight.device
-            value_inputs = np.stack(
-                [final_value_obs_batch[env_idx][agent_id] for env_idx in range(n_envs)],
-                axis=0,
-            )
-            value_tensor = torch.tensor(value_inputs, dtype=torch.float32, device=device)
-            value_np = agents[agent_id].value(value_tensor).detach().cpu().numpy()
-            last_values[:, agent_idx] = value_np.astype(np.float32)
+                value_tensor = torch.tensor(value_inputs, dtype=torch.float32, device=device)
+                value_np = agents[agent_id].value(value_tensor).detach().cpu().numpy()
+                last_values[:, agent_idx] = value_np.astype(np.float32)
 
-    advantages, returns = buffer.compute_gae(
-        last_values=last_values,
-        gamma=cfg.gamma,
-        lam=cfg.lam,
-    )
+    with _accumulate_time(rollout_timing, "rollout_gae_s"):
+        advantages, returns = buffer.compute_gae(
+            last_values=last_values,
+            gamma=cfg.gamma,
+            lam=cfg.lam,
+        )
+    rollout_timing["rollout_wall_s"] = time.perf_counter() - rollout_started_at
+    buffer.timing_stats = rollout_timing
     return buffer, advantages, returns, responsiveness_updates
 
 
@@ -839,9 +953,6 @@ def _single_run(cfg: TrainConfig):
     _seed_everything(cfg.seed)
     agent_ids = _agent_ids(cfg.n_agents)
     sender_ids = _sender_ids(cfg)
-    value_obs_dim = (5 + len(sender_ids) * cfg.vocab_size if cfg.comm_enabled else 5) + (
-        1 if cfg.value_time_feature else 0
-    )
     if str(cfg.msg_training_intervention).strip().lower() != "none":
         print(
             "[msg-training-intervention] "
@@ -859,6 +970,7 @@ def _single_run(cfg: TrainConfig):
     )
     try:
         obs_wrapper = wrapper if wrapper is not None else wrappers[0]
+        value_obs_dim = obs_wrapper.obs_dim + (1 if cfg.value_time_feature else 0)
         agents = _build_agents(cfg, obs_dim=obs_wrapper.obs_dim, sender_ids=sender_ids)
         resume_payload = {}
         if str(cfg.resume_ckpt or "").strip():
@@ -911,6 +1023,12 @@ def _single_run(cfg: TrainConfig):
         cumulative_f_acc: Dict[str, Dict[str, float]] = {}
         window_f_acc: Dict[str, Dict[str, float]] = {}
         sender_agent_idx = {sender_id: agent_ids.index(sender_id) for sender_id in sender_ids}
+        sender_history: Dict[str, Deque[int]] = {}
+        if cfg.comm_enabled and str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+            sender_history = {
+                sender_id: deque(maxlen=max(1, int(cfg.msg_training_history_len)))
+                for sender_id in sender_ids
+            }
         f_keys_sorted = sorted({f"{float(v):.3f}" for v in cfg.F}, key=float)
         f_key_to_idx = {key: idx for idx, key in enumerate(f_keys_sorted)}
         def _new_comm_window_counts():
@@ -939,6 +1057,8 @@ def _single_run(cfg: TrainConfig):
         last_local_episode = 0
 
         for episode in range(total_updates):
+            episode_started_at = time.perf_counter()
+            session_log_wall_s = 0.0
             local_episode0 = int(episode) * int(episode_stride)
             local_episode1 = min(int(cfg.n_episodes), local_episode0 + int(episode_stride))
             abs_episode0 = int(cfg.episode_offset) + int(local_episode0)
@@ -993,12 +1113,24 @@ def _single_run(cfg: TrainConfig):
                     agent_ids=agent_ids,
                     sender_ids=sender_ids,
                 )
+                rollout_timing = dict(getattr(vector_buffer, "timing_stats", {}))
+                flatten_started_at = time.perf_counter()
                 buffer = vector_buffer.flatten()
+                flatten_elapsed_s = time.perf_counter() - flatten_started_at
+                rollout_timing["rollout_flatten_s"] = float(
+                    rollout_timing.get("rollout_flatten_s", 0.0)
+                ) + flatten_elapsed_s
+                rollout_timing["rollout_wall_s"] = float(
+                    rollout_timing.get("rollout_wall_s", 0.0)
+                ) + flatten_elapsed_s
+                buffer.timing_stats = rollout_timing
                 for agent_id, values_list in responsiveness_updates.items():
                     window_responsiveness[agent_id].extend(values_list)
                 if session_logger is not None:
+                    session_log_started_at = time.perf_counter()
                     for env_idx in range(int(cfg.num_envs)):
                         session_logger.log_session(vector_buffer.to_single_env_buffer(env_idx))
+                    session_log_wall_s += time.perf_counter() - session_log_started_at
             else:
                 buffer = TrajectoryBuffer(
                     agent_ids=agent_ids,
@@ -1009,49 +1141,71 @@ def _single_run(cfg: TrainConfig):
                     vocab_size=cfg.vocab_size,
                     sender_ids=sender_ids,
                 )
+                rollout_timing = _new_rollout_timing()
+                rollout_started_at = time.perf_counter()
 
-                raw_obs = env.reset()
-                wrapper.reset(agent_ids)
+                with _accumulate_time(rollout_timing, "rollout_reset_s"):
+                    raw_obs = env.reset()
+                    wrapper.reset(agent_ids)
                 current_messages = None
                 done = False
                 steps = 0
 
                 while not done and steps < cfg.T:
-                    aug_obs = {
-                        agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
-                        for agent_id in agent_ids
-                    }
+                    with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
+                        aug_obs = {
+                            agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
+                            for agent_id in agent_ids
+                        }
 
                     message_actions = {}
                     message_log_probs = {}
                     if cfg.comm_enabled and len(sender_ids) > 0:
                         proposed = {}
                         for sender_id in sender_ids:
+                            message_started_at = time.perf_counter()
                             msg, msg_lp, _msg_ent, _msg_probs = agents[sender_id].sample_message(
                                 aug_obs[sender_id]
+                            )
+                            rollout_timing["rollout_message_policy_s"] += (
+                                time.perf_counter() - message_started_at
                             )
                             proposed[sender_id] = msg
                             message_actions[sender_id] = msg
                             message_log_probs[sender_id] = msg_lp
 
+                        postprocess_started_at = time.perf_counter()
                         dropped = wrapper.apply_msg_dropout(proposed)
                         if str(cfg.msg_training_intervention).strip().lower() == "none":
                             for sender_id, msg in proposed.items():
                                 wrapper.update_msg_marginals(sender_id, msg)
                             current_messages = dropped
                         else:
-                            delivered = _apply_training_message_intervention(
-                                intervention=cfg.msg_training_intervention,
-                                delivered=dropped,
-                                vocab_size=cfg.vocab_size,
-                            )
+                            if str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+                                delivered = _apply_training_message_intervention(
+                                    intervention=cfg.msg_training_intervention,
+                                    delivered=dropped,
+                                    vocab_size=cfg.vocab_size,
+                                    sender_history=sender_history,
+                                )
+                                _update_training_message_history(sender_history, dropped)
+                            else:
+                                delivered = _apply_training_message_intervention(
+                                    intervention=cfg.msg_training_intervention,
+                                    delivered=dropped,
+                                    vocab_size=cfg.vocab_size,
+                                )
                             for sender_id, msg in delivered.items():
                                 wrapper.update_msg_marginals(sender_id, msg)
                             current_messages = delivered
-                        aug_obs = {
-                            agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
-                            for agent_id in agent_ids
-                        }
+                        rollout_timing["rollout_message_postprocess_s"] += (
+                            time.perf_counter() - postprocess_started_at
+                        )
+                        with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
+                            aug_obs = {
+                                agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
+                                for agent_id in agent_ids
+                            }
 
                     intended_actions = {}
                     action_log_probs = {}
@@ -1059,14 +1213,19 @@ def _single_run(cfg: TrainConfig):
                     listening_bonus = {agent_id: 0.0 for agent_id in agent_ids}
                     value_aug_obs = _build_value_aug_obs(aug_obs, steps, cfg, agent_ids)
                     for agent_id in agent_ids:
+                        action_started_at = time.perf_counter()
                         action, action_lp, value, _ent, _ = agents[agent_id].sample_action(
                             aug_obs[agent_id], value_obs=value_aug_obs[agent_id]
+                        )
+                        rollout_timing["rollout_action_policy_s"] += (
+                            time.perf_counter() - action_started_at
                         )
                         intended_actions[agent_id] = int(action)
                         action_log_probs[agent_id] = float(action_lp)
                         values[agent_id] = float(value)
 
                         if cfg.comm_enabled and len(sender_ids) > 0:
+                            diag_started_at = time.perf_counter()
                             obs_t = torch.tensor(
                                 aug_obs[agent_id],
                                 dtype=torch.float32,
@@ -1114,8 +1273,12 @@ def _single_run(cfg: TrainConfig):
                                 window_responsiveness[agent_id].append(
                                     float(kl_diag.detach().cpu().item())
                                 )
+                            rollout_timing["rollout_diag_s"] += (
+                                time.perf_counter() - diag_started_at
+                            )
 
-                    raw_obs_next, rewards, done, infos = env.step(intended_actions)
+                    with _accumulate_time(rollout_timing, "rollout_env_step_s"):
+                        raw_obs_next, rewards, done, infos = env.step(intended_actions)
                     rewards_raw = _to_float_rewards(rewards)
                     rewards_train = {
                         agent_id: (rewards_raw[agent_id] / float(cfg.reward_scale))
@@ -1127,65 +1290,80 @@ def _single_run(cfg: TrainConfig):
 
                     wrapper.update(executed_actions)
 
-                    buffer.store(
-                        obs=aug_obs,
-                        actions=intended_actions,
-                        rewards=rewards_train,
-                        raw_rewards=rewards_raw,
-                        values=values,
-                        log_probs=action_log_probs,
-                        done=bool(done),
-                        executed_actions=executed_actions,
-                        flips=flips,
-                        true_f=true_f,
-                        f_hats=raw_obs,
-                        messages=current_messages,
-                        value_obs=value_aug_obs,
-                        message_actions=message_actions if len(message_actions) > 0 else None,
-                        message_log_probs=message_log_probs if len(message_log_probs) > 0 else None,
-                        listening_bonus=listening_bonus,
-                    )
+                    with _accumulate_time(rollout_timing, "rollout_buffer_store_s"):
+                        buffer.store(
+                            obs=aug_obs,
+                            actions=intended_actions,
+                            rewards=rewards_train,
+                            raw_rewards=rewards_raw,
+                            values=values,
+                            log_probs=action_log_probs,
+                            done=bool(done),
+                            executed_actions=executed_actions,
+                            flips=flips,
+                            true_f=true_f,
+                            f_hats=raw_obs,
+                            messages=current_messages,
+                            value_obs=value_aug_obs,
+                            message_actions=message_actions if len(message_actions) > 0 else None,
+                            message_log_probs=message_log_probs if len(message_log_probs) > 0 else None,
+                            listening_bonus=listening_bonus,
+                        )
                     raw_obs = raw_obs_next
                     steps += 1
 
-                if done:
-                    last_values = np.zeros((cfg.n_agents,), dtype=np.float32)
-                else:
-                    final_aug_obs = {
-                        agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
-                        for agent_id in agent_ids
-                    }
-                    final_value_obs = _build_value_aug_obs(final_aug_obs, steps, cfg, agent_ids)
-                    last_values = np.array(
-                        [
-                            agents[agent_id]
-                            .value(
-                                torch.tensor(
-                                    final_value_obs[agent_id],
-                                    dtype=torch.float32,
-                                    device=agents[agent_id].action_actor.net[0].weight.device,
-                                ).unsqueeze(0)
-                            )
-                            .detach()
-                            .cpu()
-                            .item()
-                            for agent_id in agent_ids
-                        ],
-                        dtype=np.float32,
+                with _accumulate_time(rollout_timing, "rollout_bootstrap_value_s"):
+                    if done:
+                        last_values = np.zeros((cfg.n_agents,), dtype=np.float32)
+                    else:
+                        with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
+                            final_aug_obs = {
+                                agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
+                                for agent_id in agent_ids
+                            }
+                        final_value_obs = _build_value_aug_obs(final_aug_obs, steps, cfg, agent_ids)
+                        last_values = np.array(
+                            [
+                                agents[agent_id]
+                                .value(
+                                    torch.tensor(
+                                        final_value_obs[agent_id],
+                                        dtype=torch.float32,
+                                        device=agents[agent_id].action_actor.net[0].weight.device,
+                                    ).unsqueeze(0)
+                                )
+                                .detach()
+                                .cpu()
+                                .item()
+                                for agent_id in agent_ids
+                            ],
+                            dtype=np.float32,
+                        )
+
+                with _accumulate_time(rollout_timing, "rollout_gae_s"):
+                    advantages, returns = buffer.compute_gae(
+                        last_values=last_values, gamma=cfg.gamma, lam=cfg.lam
                     )
+                rollout_timing["rollout_wall_s"] = time.perf_counter() - rollout_started_at
+                buffer.timing_stats = rollout_timing
 
-                advantages, returns = buffer.compute_gae(
-                    last_values=last_values, gamma=cfg.gamma, lam=cfg.lam
-                )
-
+            update_started_at = time.perf_counter()
             train_metrics = ppo.update(buffer, advantages, returns)
+            update_wall_s = time.perf_counter() - update_started_at
             if not _safe_is_finite(train_metrics):
                 raise FloatingPointError(
                     f"non-finite PPO metrics at episode {episode}: {train_metrics}"
                 )
 
             if session_logger is not None and int(cfg.num_envs) == 1:
+                session_log_started_at = time.perf_counter()
                 session_logger.log_session(buffer)
+                session_log_wall_s += time.perf_counter() - session_log_started_at
+
+            rollout_timing = dict(getattr(buffer, "timing_stats", {}))
+            rollout_wall_s = float(rollout_timing.get("rollout_wall_s", 0.0))
+            rollout_other_s = _rollout_other_time(rollout_timing)
+            episode_wall_s = time.perf_counter() - episode_started_at
 
             coop_rate = (
                 float(np.mean(buffer.executed_actions[: buffer.t])) if buffer.t > 0 else 0.0
@@ -1228,6 +1406,15 @@ def _single_run(cfg: TrainConfig):
                             window_comm_counts[sender_id]["msg_f"][msg, f_idx] += 1.0
                             window_comm_counts[sender_id]["msg_action"][msg, act] += 1.0
 
+            episode_other_s = max(
+                0.0,
+                float(episode_wall_s)
+                - float(rollout_wall_s)
+                - float(update_wall_s)
+                - float(session_log_wall_s),
+            )
+            steps_per_episode = float(buffer.t)
+            agent_steps_per_episode = float(buffer.t * cfg.n_agents)
             episode_metrics = {
                 "episode": int(abs_episode1),
                 "episode_local": int(local_episode1),
@@ -1239,6 +1426,39 @@ def _single_run(cfg: TrainConfig):
                 "lr_current": float(episode_lr),
                 "entropy_coeff_current": float(ppo.entropy_coeff),
                 "msg_entropy_coeff_current": float(ppo.msg_entropy_coeff),
+                "episode_wall_s": float(episode_wall_s),
+                "episode_other_s": float(episode_other_s),
+                "session_log_wall_s": float(session_log_wall_s),
+                "update_wall_s": float(update_wall_s),
+                "rollout_wall_s": float(rollout_wall_s),
+                "rollout_other_s": float(rollout_other_s),
+                "rollout_reset_s": float(rollout_timing.get("rollout_reset_s", 0.0)),
+                "rollout_obs_build_s": float(rollout_timing.get("rollout_obs_build_s", 0.0)),
+                "rollout_message_policy_s": float(
+                    rollout_timing.get("rollout_message_policy_s", 0.0)
+                ),
+                "rollout_message_postprocess_s": float(
+                    rollout_timing.get("rollout_message_postprocess_s", 0.0)
+                ),
+                "rollout_action_policy_s": float(
+                    rollout_timing.get("rollout_action_policy_s", 0.0)
+                ),
+                "rollout_diag_s": float(rollout_timing.get("rollout_diag_s", 0.0)),
+                "rollout_env_step_s": float(rollout_timing.get("rollout_env_step_s", 0.0)),
+                "rollout_buffer_store_s": float(
+                    rollout_timing.get("rollout_buffer_store_s", 0.0)
+                ),
+                "rollout_bootstrap_value_s": float(
+                    rollout_timing.get("rollout_bootstrap_value_s", 0.0)
+                ),
+                "rollout_gae_s": float(rollout_timing.get("rollout_gae_s", 0.0)),
+                "rollout_flatten_s": float(rollout_timing.get("rollout_flatten_s", 0.0)),
+                "episode_steps_per_s": _safe_per_sec(steps_per_episode, episode_wall_s),
+                "rollout_steps_per_s": _safe_per_sec(steps_per_episode, rollout_wall_s),
+                "update_steps_per_s": _safe_per_sec(steps_per_episode, update_wall_s),
+                "episode_agent_steps_per_s": _safe_per_sec(
+                    agent_steps_per_episode, episode_wall_s
+                ),
                 **train_metrics,
             }
             for regime in ("competitive", "mixed", "cooperative"):
@@ -1254,7 +1474,9 @@ def _single_run(cfg: TrainConfig):
                 print(
                     f"[episode {abs_episode1:04d}] "
                     f"coop={coop_rate:.3f} avg_reward={avg_reward:.3f} "
-                    f"loss={train_metrics['loss_total']:.4f}"
+                    f"loss={train_metrics['loss_total']:.4f} "
+                    f"roll={rollout_wall_s:.3f}s upd={update_wall_s:.3f}s "
+                    f"sps={episode_metrics['episode_steps_per_s']:.1f}"
                 )
 
             if int(abs_episode1) % max(1, int(cfg.regime_log_interval)) == 0:
@@ -1636,7 +1858,15 @@ def parse_args():
         "--msg_training_intervention",
         type=str,
         default="none",
-        choices=["none", "uniform", "public_random", "fixed0", "fixed1"],
+        choices=["none", "uniform", "public_random", "fixed0", "fixed1", "sender_shuffle"],
+    )
+    parser.add_argument("--msg_training_history_len", type=int, default=4096)
+    parser.add_argument(
+        "--history_mode",
+        type=str,
+        default="full",
+        choices=["full", "reduced"],
+        help="Observation-wrapper history block mode. 'reduced' keeps the tensor shape but zeros the temporal history slice.",
     )
     parser.add_argument("--episode_offset", type=int, default=0)
     parser.add_argument("--schedule_total_episodes", type=int, default=0)
@@ -1736,6 +1966,8 @@ def args_to_config(args) -> TrainConfig:
         vocab_size=args.vocab_size,
         msg_dropout=args.msg_dropout,
         msg_training_intervention=args.msg_training_intervention,
+        msg_training_history_len=args.msg_training_history_len,
+        history_mode=args.history_mode,
         episode_offset=args.episode_offset,
         schedule_total_episodes=args.schedule_total_episodes,
         hidden_size=args.hidden_size,
@@ -1811,6 +2043,10 @@ def args_to_config(args) -> TrainConfig:
         )
     if str(cfg.msg_training_intervention) == "fixed1" and int(cfg.vocab_size) < 2:
         raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
+    if int(cfg.msg_training_history_len) <= 0:
+        raise ValueError("msg_training_history_len must be > 0")
+    if str(cfg.history_mode).strip().lower() not in ("full", "reduced"):
+        raise ValueError("history_mode must be one of: full, reduced")
     if int(cfg.episode_offset) < 0:
         raise ValueError("episode_offset must be >= 0")
     if int(cfg.schedule_total_episodes) < 0:

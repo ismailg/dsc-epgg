@@ -108,6 +108,12 @@ def _run_task(task: Dict[str, object], raw_dir: Path, log_dir: Path, skip_existi
 
     env = os.environ.copy()
     env["OBJC_DISABLE_INITIALIZE_FORK_SAFETY"] = "YES"
+    env.setdefault("OMP_NUM_THREADS", "1")
+    env.setdefault("MKL_NUM_THREADS", "1")
+    env.setdefault("OPENBLAS_NUM_THREADS", "1")
+    env.setdefault("VECLIB_MAXIMUM_THREADS", "1")
+    env.setdefault("NUMEXPR_NUM_THREADS", "1")
+    env.setdefault("MPLBACKEND", "Agg")
     with log_path.open("w", encoding="utf-8") as log_f:
         subprocess.run(
             cmd,

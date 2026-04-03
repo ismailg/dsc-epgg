@@ -1,4 +1,5 @@
 from pathlib import Path
+from collections import deque
 
 import torch
 
@@ -56,6 +57,36 @@ def test_public_random_training_intervention_shares_one_token_across_senders():
     assert len(set(out.values())) == 1
 
 
+def test_sender_shuffle_training_intervention_uses_history_when_present():
+    delivered = {"agent_0": 0, "agent_1": 1}
+    sender_history = {
+        "agent_0": deque([1, 1, 1]),
+        "agent_1": deque([0, 0, 0]),
+    }
+    out = train_ppo._apply_training_message_intervention(
+        intervention="sender_shuffle",
+        delivered=delivered,
+        vocab_size=2,
+        sender_history=sender_history,
+    )
+    assert out == {"agent_0": 1, "agent_1": 0}
+
+
+def test_sender_shuffle_training_intervention_falls_back_to_delivered_if_history_empty():
+    delivered = {"agent_0": 0, "agent_1": 1}
+    sender_history = {
+        "agent_0": deque([]),
+        "agent_1": deque([]),
+    }
+    out = train_ppo._apply_training_message_intervention(
+        intervention="sender_shuffle",
+        delivered=delivered,
+        vocab_size=2,
+        sender_history=sender_history,
+    )
+    assert out == delivered
+
+
 def test_episode_offset_drives_absolute_checkpoint_numbering(tmp_path: Path):
     ckpt = tmp_path / "cond2_seed888.pt"
     cfg = minimal_test_config(
@@ -78,3 +109,23 @@ def test_episode_offset_drives_absolute_checkpoint_numbering(tmp_path: Path):
     payload = torch.load(ckpt, map_location="cpu")
     assert payload["config"]["episode_offset"] == 10
     assert payload["config"]["schedule_total_episodes"] == 13
+
+
+def test_reduced_history_training_smoke_persists_history_mode(tmp_path: Path):
+    ckpt = tmp_path / "cond1_seed999.pt"
+    cfg = minimal_test_config(
+        n_agents=4,
+        n_episodes=2,
+        T=4,
+        comm_enabled=True,
+        n_senders=4,
+        seed=999,
+        save_path=str(ckpt),
+        condition_name="cond1",
+        history_mode="reduced",
+    )
+
+    train(cfg)
+
+    payload = torch.load(ckpt, map_location="cpu")
+    assert payload["config"]["history_mode"] == "reduced"

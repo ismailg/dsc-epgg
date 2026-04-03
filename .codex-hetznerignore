@@ -1,0 +1,4 @@
+outputs/
+.venv/
+paper/neurips2026_comm_vecstraight/_output/
+paper/neurips2026_comm_vecstraight/tmp/
