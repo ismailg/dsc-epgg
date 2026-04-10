@@ -26,6 +26,8 @@ from src.analysis.checkpoint_artifacts import atomic_write_rows
 from src.environments import pgg_parallel_v0
 from src.wrappers import ObservationWrapper
 
+_MSG_SOURCE_MODE_CHOICES = ("learned", "uniform", "public_random", "fixed0", "fixed1")
+
 
 def _seed_everything(seed: int):
     random.seed(seed)
@@ -165,6 +167,44 @@ def _env_cfg_from_train_cfg(
     )
 
 
+def _canonical_msg_source_mode(mode: str) -> str:
+    resolved = str(mode or "learned").strip().lower() or "learned"
+    if resolved not in _MSG_SOURCE_MODE_CHOICES:
+        raise ValueError(
+            "unknown msg_source_mode="
+            f"{mode!r}; expected one of: {','.join(_MSG_SOURCE_MODE_CHOICES)}"
+        )
+    return resolved
+
+
+def _sample_exogenous_messages(
+    source_mode: str,
+    sender_ids: List[str],
+    vocab_size: int,
+) -> Dict[str, int]:
+    mode = _canonical_msg_source_mode(source_mode)
+    if mode == "learned":
+        raise ValueError("_sample_exogenous_messages requires msg_source_mode != learned")
+    if mode == "uniform":
+        return {
+            sender_id: int(np.random.randint(0, vocab_size))
+            for sender_id in sender_ids
+        }
+    if mode == "public_random":
+        shared = int(np.random.randint(0, vocab_size))
+        return {sender_id: shared for sender_id in sender_ids}
+    if mode == "fixed0":
+        return {sender_id: 0 for sender_id in sender_ids}
+    if mode == "fixed1":
+        if int(vocab_size) < 2:
+            raise ValueError("msg_source_mode=fixed1 requires vocab_size >= 2")
+        return {sender_id: 1 for sender_id in sender_ids}
+    raise ValueError(
+        "unknown msg_source_mode="
+        f"{source_mode!r}; expected one of: {','.join(_MSG_SOURCE_MODE_CHOICES)}"
+    )
+
+
 def _build_eval_objects(
     payload: Dict,
     greedy: bool = False,
@@ -193,10 +233,11 @@ def _build_eval_objects(
     )
     value_time_feature = bool(cfg.get("value_time_feature", False))
     value_obs_dim = wrapper.obs_dim + (1 if value_time_feature else 0)
+    msg_source_mode = _canonical_msg_source_mode(cfg.get("msg_source_mode", "learned"))
 
     agents = {}
     for agent_id in agent_ids:
-        can_send = comm_enabled and (agent_id in sender_ids)
+        can_send = comm_enabled and (agent_id in sender_ids) and msg_source_mode == "learned"
         agent = PPOAgentV2(
             obs_dim=wrapper.obs_dim,
             action_size=2,
@@ -221,6 +262,56 @@ def _build_eval_objects(
         _env_cfg_from_train_cfg(cfg, greedy=greedy, eval_sigmas=eval_sigmas)
     )
     return cfg, env, wrapper, agents, agent_ids, sender_ids, value_time_feature
+
+
+def _propose_eval_messages(
+    *,
+    msg_cfg: Dict,
+    msg_agents: Dict[str, PPOAgentV2],
+    sender_ids: List[str],
+    aug_obs: Dict[str, np.ndarray],
+    greedy: bool,
+) -> Tuple[Dict[str, int], Dict[str, float]]:
+    if len(sender_ids) == 0:
+        return {}, {}
+
+    msg_source_mode = _canonical_msg_source_mode(msg_cfg.get("msg_source_mode", "learned"))
+    vocab_size = int(msg_cfg.get("vocab_size", 2))
+    if msg_source_mode != "learned":
+        return _sample_exogenous_messages(
+            source_mode=msg_source_mode,
+            sender_ids=sender_ids,
+            vocab_size=vocab_size,
+        ), {}
+
+    proposed: Dict[str, int] = {}
+    policy_entropy: Dict[str, float] = {}
+    for sender_id in sender_ids:
+        msg_agent = msg_agents[sender_id]
+        if msg_agent.message_actor is None:
+            raise RuntimeError(
+                f"message_actor missing for learned msg_source_mode sender_id={sender_id}"
+            )
+        msg_device = msg_agent.action_actor.net[0].weight.device
+        obs_t = torch.tensor(
+            aug_obs[sender_id],
+            dtype=torch.float32,
+            device=msg_device,
+        )
+        logits = msg_agent.message_actor(obs_t)
+        msg_probs = torch.softmax(logits, dim=-1)
+        policy_entropy[sender_id] = float(
+            -torch.sum(msg_probs * torch.log2(torch.clamp(msg_probs, min=1e-12)))
+            .detach()
+            .cpu()
+            .item()
+        )
+        if greedy:
+            msg = int(torch.argmax(logits).item())
+        else:
+            msg, _lp, _ent, _probs = msg_agent.sample_message(aug_obs[sender_id])
+        proposed[sender_id] = int(msg)
+    return proposed, policy_entropy
 
 
 def _build_message_combos(vocab_size: int, n_senders: int):
@@ -445,6 +536,7 @@ def _resolve_eval_objects(
     comm_enabled = bool(cfg.get("comm_enabled", False))
     vocab_size = int(cfg.get("vocab_size", 2))
     msg_agents = agents
+    msg_cfg = cfg
     cross_play_label = "none"
     cross_play_checkpoint = str(cross_play_checkpoint or "").strip()
     if cross_play_checkpoint != "":
@@ -493,6 +585,7 @@ def _resolve_eval_objects(
                 f"obs_dim primary={wrapper.obs_dim} xp={xp_wrapper.obs_dim}"
             )
         msg_agents = xp_agents
+        msg_cfg = xp_cfg
         cross_play_label = os.path.basename(cross_play_checkpoint)
         try:
             xp_env.close()
@@ -509,6 +602,7 @@ def _resolve_eval_objects(
         sender_ids,
         value_time_feature,
         msg_agents,
+        msg_cfg,
         cross_play_label,
     )
 
@@ -518,6 +612,7 @@ def _collect_sender_shuffle_state(
     env,
     wrapper: ObservationWrapper,
     agents: Dict[str, PPOAgentV2],
+    msg_cfg: Dict,
     msg_agents: Dict[str, PPOAgentV2],
     agent_ids: List[str],
     sender_ids: List[str],
@@ -563,25 +658,16 @@ def _collect_sender_shuffle_state(
 
                 proposed = {}
                 if comm_enabled and len(sender_ids) > 0:
-                    for sender_id in sender_ids:
-                        msg_agent = msg_agents[sender_id]
-                        msg_device = msg_agent.action_actor.net[0].weight.device
-                        obs_t = torch.tensor(
-                            aug_obs[sender_id],
-                            dtype=torch.float32,
-                            device=msg_device,
-                        )
-                        logits = msg_agent.message_actor(obs_t)
-                        if greedy:
-                            msg = int(torch.argmax(logits).item())
-                        else:
-                            msg, _lp, _ent, _probs = msg_agent.sample_message(
-                                aug_obs[sender_id]
-                            )
-                        proposed[sender_id] = int(msg)
+                    proposed, _policy_entropy = _propose_eval_messages(
+                        msg_cfg=msg_cfg,
+                        msg_agents=msg_agents,
+                        sender_ids=sender_ids,
+                        aug_obs=aug_obs,
+                        greedy=greedy,
+                    )
+                    delivered = wrapper.apply_msg_dropout(proposed)
                     for sender_id, msg in proposed.items():
                         wrapper.update_msg_marginals(sender_id, msg)
-                    delivered = wrapper.apply_msg_dropout(proposed)
                     for sender_id in sender_ids:
                         tokens_by_sender[sender_id].append(int(delivered[sender_id]))
                     current_messages = delivered
@@ -1184,6 +1270,7 @@ def _eval_checkpoint(
         sender_ids,
         value_time_feature,
         msg_agents,
+        msg_cfg,
         cross_play_label,
     ) = _resolve_eval_objects(
         payload=payload,
@@ -1205,6 +1292,7 @@ def _eval_checkpoint(
             env=env,
             wrapper=wrapper,
             agents=agents,
+            msg_cfg=msg_cfg,
             msg_agents=msg_agents,
             agent_ids=agent_ids,
             sender_ids=sender_ids,
@@ -1229,6 +1317,7 @@ def _eval_checkpoint(
             sender_ids,
             value_time_feature,
             msg_agents,
+            msg_cfg,
             cross_play_label,
         ) = _resolve_eval_objects(
             payload=payload,
@@ -1334,34 +1423,19 @@ def _eval_checkpoint(
 
                 proposed = {}
                 if comm_enabled and len(sender_ids) > 0:
-                    for sender_id in sender_ids:
-                        msg_agent = msg_agents[sender_id]
-                        msg_device = msg_agent.action_actor.net[0].weight.device
-                        obs_t = torch.tensor(
-                            aug_obs[sender_id],
-                            dtype=torch.float32,
-                            device=msg_device,
-                        )
-                        logits = msg_agent.message_actor(obs_t)
-                        msg_probs = torch.softmax(logits, dim=-1)
-                        msg_entropy = float(
-                            -torch.sum(msg_probs * torch.log2(torch.clamp(msg_probs, min=1e-12)))
-                            .detach()
-                            .cpu()
-                            .item()
-                        )
-                        policy_entropy[sender_id].append(msg_entropy)
-                        if greedy:
-                            msg = int(torch.argmax(logits).item())
-                        else:
-                            msg, _lp, _ent, _probs = msg_agent.sample_message(
-                                aug_obs[sender_id]
-                            )
-                        proposed[sender_id] = int(msg)
+                    proposed, policy_entropy_step = _propose_eval_messages(
+                        msg_cfg=msg_cfg,
+                        msg_agents=msg_agents,
+                        sender_ids=sender_ids,
+                        aug_obs=aug_obs,
+                        greedy=greedy,
+                    )
+                    for sender_id, msg_entropy in policy_entropy_step.items():
+                        policy_entropy[sender_id].append(float(msg_entropy))
                     remapped = _apply_sender_remap(proposed, sender_remap=sender_remap)
+                    dropped = wrapper.apply_msg_dropout(remapped)
                     for sender_id, msg in remapped.items():
                         wrapper.update_msg_marginals(sender_id, msg)
-                    dropped = wrapper.apply_msg_dropout(remapped)
                     delivered, force_zero_message_slice = _apply_message_intervention(
                         intervention=ablation_label,
                         delivered=dropped,

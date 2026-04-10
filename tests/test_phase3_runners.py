@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 import torch
 
+from src.algos.PPO import PPOAgentV2
 from src.analysis import evaluate_regime_conditional
 from src.analysis.checkpoint_artifacts import (
     infer_absolute_milestones,
@@ -352,6 +353,45 @@ def test_public_noisy_observability_uses_one_shared_sample(monkeypatch):
         "agent_2": 4.25,
         "agent_3": 4.25,
     }
+
+
+def test_eval_checkpoint_uses_native_exogenous_message_source(monkeypatch, tmp_path: Path):
+    ckpt = tmp_path / "cond1_public_random_seed445.pt"
+    cfg = minimal_test_config(
+        n_agents=4,
+        n_episodes=2,
+        T=4,
+        comm_enabled=True,
+        n_senders=4,
+        seed=445,
+        save_path=str(ckpt),
+        condition_name="cond1",
+        sign_lambda=0.0,
+        list_lambda=0.0,
+        msg_dropout=0.0,
+        msg_source_mode="public_random",
+    )
+    train(cfg)
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("sample_message should not be called for exogenous msg_source_mode")
+
+    monkeypatch.setattr(PPOAgentV2, "sample_message", fail_if_called)
+
+    rows, comm_rows, *_rest = evaluate_regime_conditional._eval_checkpoint(
+        checkpoint_path=str(ckpt),
+        n_eval_episodes=1,
+        eval_seed=123,
+        greedy=False,
+    )
+
+    assert len(rows) > 0
+    assert len(comm_rows) > 0
+    all_sender_rows = [
+        row for row in comm_rows if row.get("key") == "all_senders" and "n_pairs" in row
+    ]
+    assert len(all_sender_rows) > 0
+    assert all(int(row["n_pairs"]) > 0 for row in all_sender_rows)
 
 
 def test_checkpoint_suite_runner_records_public_exact_observability(tmp_path: Path):
@@ -957,6 +997,66 @@ def test_qx6_lossswitch_batch_script_preserves_vecstraight_base_contract():
     assert 'CHECKPOINT_INTERVAL="${CHECKPOINT_INTERVAL:-25000}"' in text
     assert 'MSG_ENTROPY_COEFF="${MSG_ENTROPY_COEFF:-0.01}"' in text
     assert 'MSG_ENTROPY_COEFF_FINAL="${MSG_ENTROPY_COEFF_FINAL:-0.0}"' in text
+
+
+def test_clean_msgsource_family_script_preserves_zeroaux_vecstraight_contract():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_clean_msgsource_family.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert 'learned|fixed0|fixed1|public_random|uniform' in text
+    assert 'OUT_ROOT="${OUT_ROOT:-${REPO_ROOT}/outputs/eval/phase3_vecstraight_clean_msgsource_${MODE}_15seeds_${RUN_KIND}_${RUN_DATE}}"' in text
+    assert 'TRAIN_MAX_WORKERS="${TRAIN_MAX_WORKERS:-auto}"' in text
+    assert "detect_default_train_workers()" in text
+    assert 'suggested=$(( nproc_val / 2 ))' in text
+    assert 'must resolve to a positive integer' in text
+    assert '--num_envs "${NUM_ENVS}"' in text
+    assert "--count_env_episodes" in text
+    assert '--env_backend "${ENV_BACKEND}"' in text
+    assert '--env_start_method "${ENV_START_METHOD}"' in text
+    assert "--entropy_schedule linear" in text
+    assert "--lr_schedule cosine" in text
+    assert "--msg_entropy_coeff 0.01" in text
+    assert "--msg_entropy_coeff_final 0.0" in text
+    assert "--sign_lambda 0.0" in text
+    assert "--list_lambda 0.0" in text
+    assert '--msg_dropout "${MSG_DROPOUT}"' in text
+    assert '--msg_source_mode "${MODE}"' in text
+    assert 'msg_training_intervention=none' in text
+    assert 'if (( ${#active_pids[@]} == 0 )); then' in text
+    assert 'local -a kept=()' in text
+    assert 'for pid in "${active_pids[@]}";' in text
+    assert 'if (( ${#kept[@]} == 0 )); then' in text
+    assert 'active_pids=()' in text
+    assert 'active_pids=("${kept[@]}")' in text
+
+
+def test_clean_msgsource_queue_script_runs_all_modes_on_hetzner():
+    script_path = (
+        REPO_ROOT / "scripts" / "hetzner_jobs" / "phase3_vecstraight_clean_msgsource_queue_20260410.sh"
+    )
+    text = script_path.read_text(encoding="utf-8")
+
+    assert 'RUN_DATE="${RUN_DATE:-20260410}"' in text
+    assert 'HETZNER_PROJECT_DIR="${HETZNER_PROJECT_DIR:-/root/compute-work/projects/dsc-epgg-vectorized}"' in text
+    assert 'BASELINE_MANIFEST="${BASELINE_MANIFEST:-${NEXT_ROOT}/manifests/cond2_all_15seeds.txt}"' in text
+    assert "learned" in text
+    assert "public_random" in text
+    assert "uniform" in text
+    assert "fixed0" in text
+    assert "fixed1" in text
+    assert 'TRAIN_MAX_WORKERS="${TRAIN_MAX_WORKERS:-auto}"' in text
+    assert './scripts/run_phase3_vecstraight_clean_msgsource_family.sh "${mode}" hetzner' in text
+    assert 'RUN_DATE="${RUN_DATE}" "${HETZNER_PROJECT_DIR}/scripts/run_phase3_vecstraight_setup.sh"' in text
+    assert 'log "all clean msg_source families complete"' in text
+
+
+def test_vecstraight_setup_script_is_bash_portable():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_setup.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "/bin/zsh -lc" not in text
+    assert '"${PYTHON_BIN}" -m src.analysis.prepare_phase3_vecstraight_manifests --run_date "${RUN_DATE}"' in text
 
 
 def test_recommended_smoke_script_targets_subset_not_full_matrix():

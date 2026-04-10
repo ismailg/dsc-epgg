@@ -62,6 +62,7 @@ class TrainConfig:
     n_senders: int = 0
     vocab_size: int = 2
     msg_dropout: float = 0.1
+    msg_source_mode: str = "learned"
     msg_training_intervention: str = "none"
     msg_training_history_len: int = 4096
     history_mode: str = "full"
@@ -128,6 +129,26 @@ _ROLLOUT_TIMING_COMPONENT_KEYS = (
     "rollout_gae_s",
     "rollout_flatten_s",
 )
+
+_MSG_SOURCE_MODE_CHOICES = ("learned", "uniform", "public_random", "fixed0", "fixed1")
+_MSG_TRAINING_INTERVENTION_CHOICES = (
+    "none",
+    "uniform",
+    "public_random",
+    "fixed0",
+    "fixed1",
+    "sender_shuffle",
+)
+
+
+def _canonical_msg_source_mode(mode: str) -> str:
+    resolved = str(mode or "learned").strip().lower() or "learned"
+    if resolved not in _MSG_SOURCE_MODE_CHOICES:
+        raise ValueError(
+            "unknown msg_source_mode="
+            f"{mode!r}; expected one of: {','.join(_MSG_SOURCE_MODE_CHOICES)}"
+        )
+    return resolved
 
 
 def _new_rollout_timing() -> Dict[str, float]:
@@ -359,6 +380,34 @@ def _apply_training_message_intervention(
     )
 
 
+def _sample_exogenous_messages(
+    source_mode: str,
+    sender_ids: List[str],
+    vocab_size: int,
+) -> Dict[str, int]:
+    mode = _canonical_msg_source_mode(source_mode)
+    if mode == "learned":
+        raise ValueError("_sample_exogenous_messages requires msg_source_mode != learned")
+    if mode == "uniform":
+        return {
+            sender_id: int(np.random.randint(0, vocab_size))
+            for sender_id in sender_ids
+        }
+    if mode == "public_random":
+        shared = int(np.random.randint(0, vocab_size))
+        return {sender_id: shared for sender_id in sender_ids}
+    if mode == "fixed0":
+        return {sender_id: 0 for sender_id in sender_ids}
+    if mode == "fixed1":
+        if int(vocab_size) < 2:
+            raise ValueError("msg_source_mode=fixed1 requires vocab_size >= 2")
+        return {sender_id: 1 for sender_id in sender_ids}
+    raise ValueError(
+        "unknown msg_source_mode="
+        f"{source_mode!r}; expected one of: {','.join(_MSG_SOURCE_MODE_CHOICES)}"
+    )
+
+
 def _update_training_message_history(
     sender_history: Dict[str, Deque[int]],
     natural_messages: Dict[str, int],
@@ -476,12 +525,17 @@ def _build_value_aug_obs(
 
 def _build_agents(cfg: TrainConfig, obs_dim: int, sender_ids: List[str]):
     value_obs_dim = obs_dim + (1 if cfg.value_time_feature else 0)
+    msg_source_mode = _canonical_msg_source_mode(cfg.msg_source_mode)
     agents = {}
     for agent_id in _agent_ids(cfg.n_agents):
         agents[agent_id] = PPOAgentV2(
             obs_dim=obs_dim,
             action_size=2,
-            can_send=(cfg.comm_enabled and agent_id in sender_ids),
+            can_send=(
+                cfg.comm_enabled
+                and agent_id in sender_ids
+                and msg_source_mode == "learned"
+            ),
             vocab_size=cfg.vocab_size,
             hidden_size=cfg.hidden_size,
             value_obs_dim=value_obs_dim,
@@ -665,6 +719,7 @@ def _collect_vectorized_rollout(
     sender_ids: List[str],
 ):
     n_envs = len(wrappers)
+    msg_source_mode = _canonical_msg_source_mode(cfg.msg_source_mode)
     value_obs_dim = wrappers[0].obs_dim + (1 if cfg.value_time_feature else 0)
     buffer = VectorizedTrajectoryBuffer(
         agent_ids=agent_ids,
@@ -716,52 +771,70 @@ def _collect_vectorized_rollout(
         message_actions_batch = [{} for _ in range(n_envs)]
         message_log_probs_batch = [{} for _ in range(n_envs)]
         if cfg.comm_enabled and len(sender_ids) > 0:
-            proposed_batch = [{} for _ in range(n_envs)]
-            for sender_id in sender_ids:
-                sender_obs = np.stack(
-                    [aug_obs_batch[env_idx][sender_id] for env_idx in range(n_envs)],
-                    axis=0,
-                )
-                message_started_at = time.perf_counter()
-                msg_actions, msg_log_probs, _msg_entropy, _msg_probs = agents[
-                    sender_id
-                ].sample_message_batch(sender_obs)
-                rollout_timing["rollout_message_policy_s"] += (
-                    time.perf_counter() - message_started_at
-                )
-                for env_idx in range(n_envs):
-                    proposed_batch[env_idx][sender_id] = int(msg_actions[env_idx])
-                    message_actions_batch[env_idx][sender_id] = int(msg_actions[env_idx])
-                    message_log_probs_batch[env_idx][sender_id] = float(msg_log_probs[env_idx])
+            if msg_source_mode == "learned":
+                proposed_batch = [{} for _ in range(n_envs)]
+                for sender_id in sender_ids:
+                    sender_obs = np.stack(
+                        [aug_obs_batch[env_idx][sender_id] for env_idx in range(n_envs)],
+                        axis=0,
+                    )
+                    message_started_at = time.perf_counter()
+                    msg_actions, msg_log_probs, _msg_entropy, _msg_probs = agents[
+                        sender_id
+                    ].sample_message_batch(sender_obs)
+                    rollout_timing["rollout_message_policy_s"] += (
+                        time.perf_counter() - message_started_at
+                    )
+                    for env_idx in range(n_envs):
+                        proposed_batch[env_idx][sender_id] = int(msg_actions[env_idx])
+                        message_actions_batch[env_idx][sender_id] = int(msg_actions[env_idx])
+                        message_log_probs_batch[env_idx][sender_id] = float(msg_log_probs[env_idx])
 
-            postprocess_started_at = time.perf_counter()
-            for env_idx in range(n_envs):
-                dropped = wrappers[env_idx].apply_msg_dropout(proposed_batch[env_idx])
-                if str(cfg.msg_training_intervention).strip().lower() == "none":
-                    for sender_id, msg in proposed_batch[env_idx].items():
-                        wrappers[env_idx].update_msg_marginals(sender_id, msg)
-                    current_messages_batch[env_idx] = dropped
-                else:
-                    if str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
-                        delivered = _apply_training_message_intervention(
-                            intervention=cfg.msg_training_intervention,
-                            delivered=dropped,
-                            vocab_size=cfg.vocab_size,
-                            sender_history=sender_history_batch[env_idx],
-                        )
-                        _update_training_message_history(sender_history_batch[env_idx], dropped)
+                postprocess_started_at = time.perf_counter()
+                for env_idx in range(n_envs):
+                    dropped = wrappers[env_idx].apply_msg_dropout(proposed_batch[env_idx])
+                    if str(cfg.msg_training_intervention).strip().lower() == "none":
+                        for sender_id, msg in proposed_batch[env_idx].items():
+                            wrappers[env_idx].update_msg_marginals(sender_id, msg)
+                        current_messages_batch[env_idx] = dropped
                     else:
-                        delivered = _apply_training_message_intervention(
-                            intervention=cfg.msg_training_intervention,
-                            delivered=dropped,
-                            vocab_size=cfg.vocab_size,
-                        )
-                    for sender_id, msg in delivered.items():
+                        if str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+                            delivered = _apply_training_message_intervention(
+                                intervention=cfg.msg_training_intervention,
+                                delivered=dropped,
+                                vocab_size=cfg.vocab_size,
+                                sender_history=sender_history_batch[env_idx],
+                            )
+                            _update_training_message_history(sender_history_batch[env_idx], dropped)
+                        else:
+                            delivered = _apply_training_message_intervention(
+                                intervention=cfg.msg_training_intervention,
+                                delivered=dropped,
+                                vocab_size=cfg.vocab_size,
+                            )
+                        for sender_id, msg in delivered.items():
+                            wrappers[env_idx].update_msg_marginals(sender_id, msg)
+                        current_messages_batch[env_idx] = delivered
+                rollout_timing["rollout_message_postprocess_s"] += (
+                    time.perf_counter() - postprocess_started_at
+                )
+            else:
+                postprocess_started_at = time.perf_counter()
+                for env_idx in range(n_envs):
+                    proposed = _sample_exogenous_messages(
+                        source_mode=msg_source_mode,
+                        sender_ids=sender_ids,
+                        vocab_size=cfg.vocab_size,
+                    )
+                    for sender_id, msg in proposed.items():
+                        message_actions_batch[env_idx][sender_id] = int(msg)
+                    delivered = wrappers[env_idx].apply_msg_dropout(proposed)
+                    for sender_id, msg in proposed.items():
                         wrappers[env_idx].update_msg_marginals(sender_id, msg)
                     current_messages_batch[env_idx] = delivered
-            rollout_timing["rollout_message_postprocess_s"] += (
-                time.perf_counter() - postprocess_started_at
-            )
+                rollout_timing["rollout_message_postprocess_s"] += (
+                    time.perf_counter() - postprocess_started_at
+                )
 
             with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
                 aug_obs_batch = [
@@ -953,6 +1026,13 @@ def _single_run(cfg: TrainConfig):
     _seed_everything(cfg.seed)
     agent_ids = _agent_ids(cfg.n_agents)
     sender_ids = _sender_ids(cfg)
+    msg_source_mode = _canonical_msg_source_mode(cfg.msg_source_mode)
+    if msg_source_mode != "learned":
+        print(
+            "[msg-source-mode] "
+            f"mode={msg_source_mode} sign_lambda={cfg.sign_lambda} "
+            f"list_lambda={cfg.list_lambda}"
+        )
     if str(cfg.msg_training_intervention).strip().lower() != "none":
         print(
             "[msg-training-intervention] "
@@ -1161,46 +1241,62 @@ def _single_run(cfg: TrainConfig):
                     message_actions = {}
                     message_log_probs = {}
                     if cfg.comm_enabled and len(sender_ids) > 0:
-                        proposed = {}
-                        for sender_id in sender_ids:
-                            message_started_at = time.perf_counter()
-                            msg, msg_lp, _msg_ent, _msg_probs = agents[sender_id].sample_message(
-                                aug_obs[sender_id]
-                            )
-                            rollout_timing["rollout_message_policy_s"] += (
-                                time.perf_counter() - message_started_at
-                            )
-                            proposed[sender_id] = msg
-                            message_actions[sender_id] = msg
-                            message_log_probs[sender_id] = msg_lp
+                        if msg_source_mode == "learned":
+                            proposed = {}
+                            for sender_id in sender_ids:
+                                message_started_at = time.perf_counter()
+                                msg, msg_lp, _msg_ent, _msg_probs = agents[sender_id].sample_message(
+                                    aug_obs[sender_id]
+                                )
+                                rollout_timing["rollout_message_policy_s"] += (
+                                    time.perf_counter() - message_started_at
+                                )
+                                proposed[sender_id] = msg
+                                message_actions[sender_id] = msg
+                                message_log_probs[sender_id] = msg_lp
 
-                        postprocess_started_at = time.perf_counter()
-                        dropped = wrapper.apply_msg_dropout(proposed)
-                        if str(cfg.msg_training_intervention).strip().lower() == "none":
+                            postprocess_started_at = time.perf_counter()
+                            dropped = wrapper.apply_msg_dropout(proposed)
+                            if str(cfg.msg_training_intervention).strip().lower() == "none":
+                                for sender_id, msg in proposed.items():
+                                    wrapper.update_msg_marginals(sender_id, msg)
+                                current_messages = dropped
+                            else:
+                                if str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
+                                    delivered = _apply_training_message_intervention(
+                                        intervention=cfg.msg_training_intervention,
+                                        delivered=dropped,
+                                        vocab_size=cfg.vocab_size,
+                                        sender_history=sender_history,
+                                    )
+                                    _update_training_message_history(sender_history, dropped)
+                                else:
+                                    delivered = _apply_training_message_intervention(
+                                        intervention=cfg.msg_training_intervention,
+                                        delivered=dropped,
+                                        vocab_size=cfg.vocab_size,
+                                    )
+                                for sender_id, msg in delivered.items():
+                                    wrapper.update_msg_marginals(sender_id, msg)
+                                current_messages = delivered
+                            rollout_timing["rollout_message_postprocess_s"] += (
+                                time.perf_counter() - postprocess_started_at
+                            )
+                        else:
+                            postprocess_started_at = time.perf_counter()
+                            proposed = _sample_exogenous_messages(
+                                source_mode=msg_source_mode,
+                                sender_ids=sender_ids,
+                                vocab_size=cfg.vocab_size,
+                            )
+                            for sender_id, msg in proposed.items():
+                                message_actions[sender_id] = int(msg)
+                            current_messages = wrapper.apply_msg_dropout(proposed)
                             for sender_id, msg in proposed.items():
                                 wrapper.update_msg_marginals(sender_id, msg)
-                            current_messages = dropped
-                        else:
-                            if str(cfg.msg_training_intervention).strip().lower() == "sender_shuffle":
-                                delivered = _apply_training_message_intervention(
-                                    intervention=cfg.msg_training_intervention,
-                                    delivered=dropped,
-                                    vocab_size=cfg.vocab_size,
-                                    sender_history=sender_history,
-                                )
-                                _update_training_message_history(sender_history, dropped)
-                            else:
-                                delivered = _apply_training_message_intervention(
-                                    intervention=cfg.msg_training_intervention,
-                                    delivered=dropped,
-                                    vocab_size=cfg.vocab_size,
-                                )
-                            for sender_id, msg in delivered.items():
-                                wrapper.update_msg_marginals(sender_id, msg)
-                            current_messages = delivered
-                        rollout_timing["rollout_message_postprocess_s"] += (
-                            time.perf_counter() - postprocess_started_at
-                        )
+                            rollout_timing["rollout_message_postprocess_s"] += (
+                                time.perf_counter() - postprocess_started_at
+                            )
                         with _accumulate_time(rollout_timing, "rollout_obs_build_s"):
                             aug_obs = {
                                 agent_id: wrapper.build_obs(agent_id, raw_obs[agent_id], current_messages)
@@ -1820,7 +1916,7 @@ def train(config: TrainConfig):
     return _single_run(config)
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--n_agents", type=int, default=4)
     parser.add_argument("--T", type=int, default=100)
@@ -1855,10 +1951,17 @@ def parse_args():
     parser.add_argument("--vocab_size", type=int, default=2)
     parser.add_argument("--msg_dropout", type=float, default=0.1)
     parser.add_argument(
+        "--msg_source_mode",
+        type=str,
+        default="learned",
+        choices=list(_MSG_SOURCE_MODE_CHOICES),
+        help="Native training-time message source. 'learned' uses sender policies; other modes bypass sender heads and generate delivered messages directly.",
+    )
+    parser.add_argument(
         "--msg_training_intervention",
         type=str,
         default="none",
-        choices=["none", "uniform", "public_random", "fixed0", "fixed1", "sender_shuffle"],
+        choices=list(_MSG_TRAINING_INTERVENTION_CHOICES),
     )
     parser.add_argument("--msg_training_history_len", type=int, default=4096)
     parser.add_argument(
@@ -1939,7 +2042,7 @@ def parse_args():
     parser.add_argument("--mi_null_perms", type=int, default=200)
     parser.add_argument("--mi_alpha", type=float, default=0.05)
     parser.add_argument("--disable_trainer_responsiveness_logging", action="store_true")
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
 
 def args_to_config(args) -> TrainConfig:
@@ -1965,6 +2068,7 @@ def args_to_config(args) -> TrainConfig:
         n_senders=resolved_n_senders,
         vocab_size=args.vocab_size,
         msg_dropout=args.msg_dropout,
+        msg_source_mode=args.msg_source_mode,
         msg_training_intervention=args.msg_training_intervention,
         msg_training_history_len=args.msg_training_history_len,
         history_mode=args.history_mode,
@@ -2033,14 +2137,24 @@ def args_to_config(args) -> TrainConfig:
         raise ValueError("n_senders must be in [0, n_agents]")
     if cfg.comm_enabled and cfg.n_senders <= 0:
         raise ValueError("comm_enabled requires n_senders > 0")
+    msg_source_mode = _canonical_msg_source_mode(cfg.msg_source_mode)
+    cfg.msg_source_mode = msg_source_mode
     if (not cfg.comm_enabled) and str(cfg.msg_training_intervention) != "none":
         raise ValueError("msg_training_intervention requires comm_enabled")
+    if (not cfg.comm_enabled) and msg_source_mode != "learned":
+        raise ValueError("msg_source_mode != learned requires comm_enabled")
+    if msg_source_mode != "learned" and str(cfg.msg_training_intervention) != "none":
+        raise ValueError(
+            "msg_source_mode != learned cannot be combined with msg_training_intervention"
+        )
     if str(cfg.msg_training_intervention) != "none" and (
         float(cfg.sign_lambda) != 0.0 or float(cfg.list_lambda) != 0.0
     ):
         raise ValueError(
             "msg_training_intervention requires sign_lambda=0 and list_lambda=0"
         )
+    if msg_source_mode == "fixed1" and int(cfg.vocab_size) < 2:
+        raise ValueError("msg_source_mode=fixed1 requires vocab_size >= 2")
     if str(cfg.msg_training_intervention) == "fixed1" and int(cfg.vocab_size) < 2:
         raise ValueError("msg_training_intervention=fixed1 requires vocab_size >= 2")
     if int(cfg.msg_training_history_len) <= 0:
