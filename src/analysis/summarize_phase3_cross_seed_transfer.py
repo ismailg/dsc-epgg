@@ -41,6 +41,26 @@ def _mean(values: Iterable[float]) -> float:
     return float(sum(values) / len(values))
 
 
+def _as_int(value: str | None, default: int = 0) -> int:
+    if value in ("", None):
+        return int(default)
+    return int(float(value))
+
+
+def _as_float(value: str | None, default: float = 0.0) -> float:
+    if value in ("", None):
+        return float(default)
+    return float(value)
+
+
+def _sign_with_eps(value: float, eps: float = 1e-8) -> int:
+    if value > eps:
+        return 1
+    if value < -eps:
+        return -1
+    return 0
+
+
 def _filter_transfer_rows(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
     out = []
     for row in rows:
@@ -81,12 +101,226 @@ def _filter_reference_rows(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str
     return out
 
 
+def _filter_sender_semantics_rows(rows: Iterable[Dict[str, str]]) -> List[Dict[str, str]]:
+    out = []
+    for row in rows:
+        if row.get("condition") != "cond1":
+            continue
+        if row.get("eval_policy", "greedy") != "greedy":
+            continue
+        if row.get("ablation", "none") != "none":
+            continue
+        if row.get("history_intervention", "none") != "none":
+            continue
+        if row.get("sender_remap", "none") != "none":
+            continue
+        if row.get("cross_play", "none") != "none":
+            continue
+        if row.get("summary") != "p_msg1_given_fhat":
+            continue
+        if row.get("fhat_bin") not in {"fhat<1.5", "fhat>=4.5"}:
+            continue
+        out.append(row)
+    return out
+
+
+def _build_sender_polarity(
+    rows: Iterable[Dict[str, str]]
+) -> tuple[int, Dict[Tuple[int, str], float], Dict[int, float], List[Dict[str, object]]]:
+    filtered = _filter_sender_semantics_rows(rows)
+    if not filtered:
+        raise ValueError("No natural sender-semantics rows available for non-oracle alignment rules.")
+    checkpoint_episode = max(_as_int(row.get("checkpoint_episode"), 0) for row in filtered)
+    filtered = [
+        row
+        for row in filtered
+        if _as_int(row.get("checkpoint_episode"), 0) == int(checkpoint_episode)
+    ]
+    lookup: Dict[Tuple[int, str, str], float] = {}
+    for row in filtered:
+        lookup[
+            (
+                _as_int(row.get("train_seed"), -1),
+                str(row.get("sender_id", "")),
+                str(row.get("fhat_bin", "")),
+            )
+        ] = _as_float(row.get("p_message_1"))
+
+    seed_sender_delta: Dict[Tuple[int, str], float] = {}
+    polarity_rows: List[Dict[str, object]] = []
+    seeds = sorted({_as_int(row.get("train_seed"), -1) for row in filtered})
+    sender_ids = sorted({str(row.get("sender_id", "")) for row in filtered})
+    for seed in seeds:
+        for sender_id in sender_ids:
+            low_key = (seed, sender_id, "fhat<1.5")
+            high_key = (seed, sender_id, "fhat>=4.5")
+            if low_key not in lookup or high_key not in lookup:
+                continue
+            delta = float(lookup[high_key] - lookup[low_key])
+            seed_sender_delta[(seed, sender_id)] = delta
+            polarity_rows.append(
+                {
+                    "checkpoint_episode": int(checkpoint_episode),
+                    "train_seed": int(seed),
+                    "sender_id": sender_id,
+                    "delta_high_minus_low_fhat": float(delta),
+                    "delta_sign": int(_sign_with_eps(delta)),
+                }
+            )
+
+    seed_mean_delta: Dict[int, float] = {}
+    for seed in seeds:
+        deltas = [
+            float(delta)
+            for (candidate_seed, _sender_id), delta in seed_sender_delta.items()
+            if int(candidate_seed) == int(seed)
+        ]
+        if deltas:
+            seed_mean_delta[int(seed)] = _mean(deltas)
+    return int(checkpoint_episode), seed_sender_delta, seed_mean_delta, polarity_rows
+
+
+def _predict_alignment_rules(
+    *,
+    receiver_seed: int,
+    donor_seed: int,
+    seed_sender_delta: Dict[Tuple[int, str], float],
+    seed_mean_delta: Dict[int, float],
+) -> Dict[str, Dict[str, object]]:
+    sender_ids = sorted(
+        {
+            sender_id
+            for (seed, sender_id) in seed_sender_delta.keys()
+            if int(seed) in (int(receiver_seed), int(donor_seed))
+        }
+    )
+    common_sender_ids = [
+        sender_id
+        for sender_id in sender_ids
+        if (int(receiver_seed), sender_id) in seed_sender_delta
+        and (int(donor_seed), sender_id) in seed_sender_delta
+    ]
+    if not common_sender_ids:
+        raise ValueError(f"No shared sender slots for receiver={receiver_seed}, donor={donor_seed}")
+
+    predictions: Dict[str, Dict[str, object]] = {}
+
+    receiver_mean = float(seed_mean_delta.get(int(receiver_seed), 0.0))
+    donor_mean = float(seed_mean_delta.get(int(donor_seed), 0.0))
+    seed_mean_score = float(receiver_mean * donor_mean)
+    predictions["seed_mean_sign"] = {
+        "predicted_alignment_label": "identity__noflip"
+        if seed_mean_score >= 0.0
+        else "identity__flipall",
+        "rule_score": seed_mean_score,
+        "n_slots_used": len(common_sender_ids),
+    }
+
+    majority_terms = []
+    weighted_terms = []
+    for sender_id in common_sender_ids:
+        receiver_delta = float(seed_sender_delta[(int(receiver_seed), sender_id)])
+        donor_delta = float(seed_sender_delta[(int(donor_seed), sender_id)])
+        majority_terms.append(_sign_with_eps(receiver_delta) * _sign_with_eps(donor_delta))
+        weighted_terms.append(receiver_delta * donor_delta)
+
+    majority_score = float(sum(majority_terms))
+    weighted_score = float(sum(weighted_terms))
+    predictions["majority_slot_sign"] = {
+        "predicted_alignment_label": "identity__noflip"
+        if majority_score >= 0.0
+        else "identity__flipall",
+        "rule_score": majority_score,
+        "n_slots_used": len(common_sender_ids),
+    }
+    predictions["weighted_slot_sign"] = {
+        "predicted_alignment_label": "identity__noflip"
+        if weighted_score >= 0.0
+        else "identity__flipall",
+        "rule_score": weighted_score,
+        "n_slots_used": len(common_sender_ids),
+    }
+    return predictions
+
+
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--transfer_main_csv", type=str, required=True)
     p.add_argument("--reference_main_csv", type=str, required=True)
     p.add_argument("--out_dir", type=str, required=True)
+    p.add_argument("--sender_semantics_csv", type=str, default="")
     return p.parse_args()
+
+
+def _write_nonoracle_markdown(
+    *,
+    out_dir: Path,
+    checkpoint_episode: int,
+    polarity_rows: List[Dict[str, object]],
+    pairwise_rows: List[Dict[str, object]],
+    receiver_rows: List[Dict[str, object]],
+    summary_rows: List[Dict[str, object]],
+    usage_rows: List[Dict[str, object]],
+) -> None:
+    metric_lookup = {
+        (str(row["rule_name"]), str(row["f_value"]), str(row["metric"])): float(row["value"])
+        for row in summary_rows
+    }
+    n_lookup = {
+        (str(row["rule_name"]), str(row["f_value"]), str(row["metric"])): int(row["n"])
+        for row in summary_rows
+    }
+    lines = ["# Non-Oracle Cross-Seed Alignment Summary", ""]
+    lines.append(
+        f"- sender_polarity_checkpoint_episode: `{int(checkpoint_episode)}`"
+    )
+    lines.append(
+        f"- sender_polarity_rows: `{len(polarity_rows)}`"
+    )
+    lines.append(
+        "Rules below are pre-specified polarity-based predictions evaluated on the already computed identity and flipall pairwise transfer outcomes."
+    )
+    lines.append("")
+
+    rule_names = sorted({str(row["rule_name"]) for row in summary_rows})
+    for rule_name in rule_names:
+        lines.append(f"## {rule_name}")
+        for f_value in FOCAL_F_VALUES:
+            key = (rule_name, f_value, "predicted_mean")
+            if key not in metric_lookup:
+                continue
+            predicted = 100.0 * metric_lookup[key]
+            d_nat = 100.0 * metric_lookup[(rule_name, f_value, "predicted_minus_natural_mean")]
+            d_pub = 100.0 * metric_lookup[(rule_name, f_value, "predicted_minus_public_random_mean")]
+            d_shuf = 100.0 * metric_lookup[(rule_name, f_value, "predicted_minus_sender_shuffle_mean")]
+            d_ident = 100.0 * metric_lookup[(rule_name, f_value, "predicted_minus_identity_mean")]
+            d_flip = 100.0 * metric_lookup[(rule_name, f_value, "predicted_minus_flipall_mean")]
+            d_best = 100.0 * metric_lookup[(rule_name, f_value, "predicted_minus_best_aligned_mean")]
+            recv_d_nat = 100.0 * metric_lookup[(rule_name, f_value, "receiver_predicted_minus_natural_mean")]
+            recv_pos_nat = int(round(metric_lookup[(rule_name, f_value, "receiver_positive_predicted_minus_natural_count")]))
+            recv_n = n_lookup[(rule_name, f_value, "receiver_predicted_minus_natural_mean")]
+            lines.append(f"### f={float(f_value):.1f}")
+            lines.append(f"- Predicted-rule mean: {predicted:.1f}%")
+            lines.append(f"- Predicted minus natural: {d_nat:+.1f} pp")
+            lines.append(f"- Predicted minus public random: {d_pub:+.1f} pp")
+            lines.append(f"- Predicted minus sender shuffle: {d_shuf:+.1f} pp")
+            lines.append(f"- Predicted minus foreign identity: {d_ident:+.1f} pp")
+            lines.append(f"- Predicted minus foreign flipall: {d_flip:+.1f} pp")
+            lines.append(f"- Predicted minus oracle best-aligned: {d_best:+.1f} pp")
+            lines.append(
+                f"- Receiver-level robustness: mean predicted minus natural {recv_d_nat:+.1f} pp; positive for {recv_pos_nat}/{recv_n} receivers"
+            )
+            lines.append("")
+
+    if usage_rows:
+        lines.append("## Alignment Usage")
+        for row in usage_rows:
+            lines.append(
+                f"- {row['rule_name']} at f={float(row['f_value']):.1f}: {row['predicted_alignment_label']} used {int(row['count'])} times"
+            )
+        lines.append("")
+
+    (out_dir / "nonoracle_alignment_summary.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> None:
@@ -474,6 +708,150 @@ def main() -> None:
         lines.append("")
 
     (out_dir / "cross_seed_transfer_summary.md").write_text("\n".join(lines), encoding="utf-8")
+
+    if str(args.sender_semantics_csv).strip():
+        (
+            polarity_checkpoint_episode,
+            seed_sender_delta,
+            seed_mean_delta,
+            polarity_rows,
+        ) = _build_sender_polarity(_read_rows(args.sender_semantics_csv))
+
+        pair_lookup = {
+            (
+                int(row["receiver_seed"]),
+                int(row["donor_seed"]),
+                str(row["f_value"]),
+                str(row["alignment_label"]),
+            ): row
+            for row in transfer_pair_rows
+        }
+        best_lookup = {
+            (
+                int(row["receiver_seed"]),
+                int(row["donor_seed"]),
+                str(row["f_value"]),
+            ): row
+            for row in best_rows
+        }
+
+        predicted_pairwise_rows: List[Dict[str, object]] = []
+        predicted_receiver_rows: List[Dict[str, object]] = []
+        predicted_summary_rows: List[Dict[str, object]] = []
+        predicted_usage_counter: Counter[Tuple[str, str, str]] = Counter()
+
+        predicted_by_rule_receiver_f: Dict[Tuple[str, int, str], List[Dict[str, object]]] = defaultdict(list)
+        predicted_by_rule_f: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+
+        for pair_key in sorted(by_pair_f.keys()):
+            receiver_seed, donor_seed, f_value = pair_key
+            predictions = _predict_alignment_rules(
+                receiver_seed=int(receiver_seed),
+                donor_seed=int(donor_seed),
+                seed_sender_delta=seed_sender_delta,
+                seed_mean_delta=seed_mean_delta,
+            )
+            best_row = best_lookup[(int(receiver_seed), int(donor_seed), str(f_value))]
+            for rule_name, prediction in sorted(predictions.items()):
+                predicted_alignment_label = str(prediction["predicted_alignment_label"])
+                predicted_usage_counter[(rule_name, str(f_value), predicted_alignment_label)] += 1
+                chosen_row = pair_lookup[(int(receiver_seed), int(donor_seed), str(f_value), predicted_alignment_label)]
+                coop_rate = float(chosen_row["coop_rate"])
+                record = {
+                    "rule_name": rule_name,
+                    "receiver_seed": int(receiver_seed),
+                    "donor_seed": int(donor_seed),
+                    "f_value": str(f_value),
+                    "predicted_alignment_label": predicted_alignment_label,
+                    "rule_score": float(prediction["rule_score"]),
+                    "n_slots_used": int(prediction["n_slots_used"]),
+                    "coop_rate": coop_rate,
+                    "natural_coop_rate": float(best_row["natural_coop_rate"]),
+                    "sender_shuffle_coop_rate": float(best_row["sender_shuffle_coop_rate"]),
+                    "public_random_coop_rate": float(best_row["public_random_coop_rate"]),
+                    "indep_random_coop_rate": float(best_row["indep_random_coop_rate"]),
+                    "identity_coop_rate": float(best_row["identity_coop_rate"]),
+                    "flipall_coop_rate": float(best_row["flipall_coop_rate"]),
+                    "best_aligned_coop_rate": float(best_row["best_coop_rate"]),
+                    "delta_vs_natural": float(coop_rate - float(best_row["natural_coop_rate"])),
+                    "delta_vs_sender_shuffle": float(coop_rate - float(best_row["sender_shuffle_coop_rate"])),
+                    "delta_vs_public_random": float(coop_rate - float(best_row["public_random_coop_rate"])),
+                    "delta_vs_indep_random": float(coop_rate - float(best_row["indep_random_coop_rate"])),
+                    "delta_vs_identity": float(coop_rate - float(best_row["identity_coop_rate"])),
+                    "delta_vs_flipall": float(coop_rate - float(best_row["flipall_coop_rate"])),
+                    "delta_vs_best_aligned": float(coop_rate - float(best_row["best_coop_rate"])),
+                }
+                predicted_pairwise_rows.append(record)
+                predicted_by_rule_receiver_f[(rule_name, int(receiver_seed), str(f_value))].append(record)
+                predicted_by_rule_f[(rule_name, str(f_value))].append(record)
+
+        predicted_receiver_by_rule_f: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+        for (rule_name, receiver_seed, f_value), rows in sorted(predicted_by_rule_receiver_f.items()):
+            receiver_row = {
+                "rule_name": rule_name,
+                "receiver_seed": int(receiver_seed),
+                "f_value": str(f_value),
+                "n_donors": len(rows),
+                "predicted_coop_rate_mean": _mean(float(row["coop_rate"]) for row in rows),
+                "natural_coop_rate": _mean(float(row["natural_coop_rate"]) for row in rows),
+                "sender_shuffle_coop_rate": _mean(float(row["sender_shuffle_coop_rate"]) for row in rows),
+                "public_random_coop_rate": _mean(float(row["public_random_coop_rate"]) for row in rows),
+                "identity_coop_rate_mean": _mean(float(row["identity_coop_rate"]) for row in rows),
+                "flipall_coop_rate_mean": _mean(float(row["flipall_coop_rate"]) for row in rows),
+                "best_aligned_coop_rate_mean": _mean(float(row["best_aligned_coop_rate"]) for row in rows),
+                "predicted_minus_natural_mean": _mean(float(row["delta_vs_natural"]) for row in rows),
+                "predicted_minus_sender_shuffle_mean": _mean(float(row["delta_vs_sender_shuffle"]) for row in rows),
+                "predicted_minus_public_random_mean": _mean(float(row["delta_vs_public_random"]) for row in rows),
+                "predicted_minus_identity_mean": _mean(float(row["delta_vs_identity"]) for row in rows),
+                "predicted_minus_flipall_mean": _mean(float(row["delta_vs_flipall"]) for row in rows),
+                "predicted_minus_best_aligned_mean": _mean(float(row["delta_vs_best_aligned"]) for row in rows),
+            }
+            predicted_receiver_rows.append(receiver_row)
+            predicted_receiver_by_rule_f[(rule_name, str(f_value))].append(receiver_row)
+
+        for rule_name, f_value in sorted(predicted_by_rule_f.keys()):
+            cur = predicted_by_rule_f[(rule_name, f_value)]
+            receiver_cur = predicted_receiver_by_rule_f[(rule_name, f_value)]
+            predicted_summary_rows.extend(
+                [
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "predicted_mean", "value": _mean(float(row["coop_rate"]) for row in cur), "n": len(cur), "sample_unit": "ordered_pairs"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "predicted_minus_natural_mean", "value": _mean(float(row["delta_vs_natural"]) for row in cur), "n": len(cur), "sample_unit": "ordered_pairs"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "predicted_minus_sender_shuffle_mean", "value": _mean(float(row["delta_vs_sender_shuffle"]) for row in cur), "n": len(cur), "sample_unit": "ordered_pairs"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "predicted_minus_public_random_mean", "value": _mean(float(row["delta_vs_public_random"]) for row in cur), "n": len(cur), "sample_unit": "ordered_pairs"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "predicted_minus_identity_mean", "value": _mean(float(row["delta_vs_identity"]) for row in cur), "n": len(cur), "sample_unit": "ordered_pairs"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "predicted_minus_flipall_mean", "value": _mean(float(row["delta_vs_flipall"]) for row in cur), "n": len(cur), "sample_unit": "ordered_pairs"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "predicted_minus_best_aligned_mean", "value": _mean(float(row["delta_vs_best_aligned"]) for row in cur), "n": len(cur), "sample_unit": "ordered_pairs"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "receiver_predicted_mean", "value": _mean(float(row["predicted_coop_rate_mean"]) for row in receiver_cur), "n": len(receiver_cur), "sample_unit": "receivers"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "receiver_predicted_minus_natural_mean", "value": _mean(float(row["predicted_minus_natural_mean"]) for row in receiver_cur), "n": len(receiver_cur), "sample_unit": "receivers"},
+                    {"rule_name": rule_name, "f_value": f_value, "metric": "receiver_positive_predicted_minus_natural_count", "value": float(sum(float(row["predicted_minus_natural_mean"]) > 0.0 for row in receiver_cur)), "n": len(receiver_cur), "sample_unit": "receivers"},
+                ]
+            )
+
+        predicted_usage_rows = [
+            {
+                "rule_name": rule_name,
+                "f_value": f_value,
+                "predicted_alignment_label": predicted_alignment_label,
+                "count": count,
+            }
+            for (rule_name, f_value, predicted_alignment_label), count in sorted(predicted_usage_counter.items())
+        ]
+
+        _write_rows(out_dir / "nonoracle_alignment_sender_polarity.csv", polarity_rows)
+        _write_rows(out_dir / "nonoracle_alignment_pairwise_results.csv", predicted_pairwise_rows)
+        _write_rows(out_dir / "nonoracle_alignment_receiver_summary.csv", predicted_receiver_rows)
+        _write_rows(out_dir / "nonoracle_alignment_summary_by_f.csv", predicted_summary_rows)
+        _write_rows(out_dir / "nonoracle_alignment_usage.csv", predicted_usage_rows)
+        _write_nonoracle_markdown(
+            out_dir=out_dir,
+            checkpoint_episode=int(polarity_checkpoint_episode),
+            polarity_rows=polarity_rows,
+            pairwise_rows=predicted_pairwise_rows,
+            receiver_rows=predicted_receiver_rows,
+            summary_rows=predicted_summary_rows,
+            usage_rows=predicted_usage_rows,
+        )
+
     print(f"[xseed-summary] out_dir={out_dir}")
 
 
