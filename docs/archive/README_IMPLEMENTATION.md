@@ -5,10 +5,10 @@ This is a historical implementation-plan document for the original Week 1-2 buil
 It is still useful for the original staged implementation scope, but it is not the main entry
 point for current `phase3_vecstraight` work. For current work, start with:
 
-- [`README.md`](README.md)
-- [`DATA_MAP.md`](DATA_MAP.md)
-- [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md)
-- [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md)
+- [`../../README.md`](../../README.md)
+- [`../../DATA_MAP.md`](../../DATA_MAP.md)
+- [`../../PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](../../PHASE3_VECSTRAIGHT_NEXT_STEPS.md)
+- [`../../PHASE3_VECSTRAIGHT_PAPER_TODO.md`](../../PHASE3_VECSTRAIGHT_PAPER_TODO.md)
 
 ## Delivery stages
 

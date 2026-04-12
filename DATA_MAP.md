@@ -1,14 +1,15 @@
 # Data Map
 
-This file is the canonical artifact map for the vectorized DSC-EPGG work in this repo.
+This file is the canonical path registry for the vectorized DSC-EPGG work in this repo.
 
-It should answer two questions only:
+It should answer only two questions:
 
 1. Which result family is in scope here?
 2. Where do the authoritative local and remote artifacts live?
 
-For live interpretation and handoff context, use [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md).  
-For the active manuscript checklist, use [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md).
+For current status, use [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md).  
+For the active manuscript checklist, use [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md).  
+For dated run chronology, use [`docs/archive/PHASE3_RUN_HISTORY.md`](docs/archive/PHASE3_RUN_HISTORY.md).
 
 ## Family Scope
 
@@ -42,12 +43,14 @@ Do not treat it as interchangeable with the older staged/warm-start family in th
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_comm_gap_15seeds_local_20260325`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vectorized_comm_gap_15seeds_local_20260325)
 - corrected continuation summary:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_paper_pivot_20260329_status/sameckpt_continuations`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_paper_pivot_20260329_status/sameckpt_continuations)
-- exogenous channel summary:
+- historical exogenous channel summary:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_exogenous_channel_controls_status_20260330/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_exogenous_channel_controls_status_20260330/report)
 - qx6 loss-switch repair summary:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report)
 - Hetzner comm × history training summary:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_comm_history_factorial_status_20260401/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_comm_history_factorial_status_20260401/report)
+- Hetzner clean direct msg-source summary:
+  [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_clean_msgsource_status_20260412/report`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_clean_msgsource_status_20260412/report)
 
 ### Local fetched mirrors by family
 
@@ -66,6 +69,8 @@ Use these patterns when looking for fetched manipulation families:
   - `iwr-results/phase3_vecstraight_sameckpt_continuation_50000_{none_base,none_zeroaux,uniform_zeroaux}_15seeds_iwr_20260330`
 - Hetzner comm × history mirrors:
   - `hetzner-results/phase3_vecstraight_comm_history_factorial_{with_comm_full_history,with_comm_reduced_history,without_comm_full_history,without_comm_reduced_history}_15seeds_hetzner_20260330par24`
+- Hetzner clean direct msg-source mirrors:
+  - `hetzner-results/phase3_vecstraight_clean_msgsource_{learned,public_random,uniform,fixed0,fixed1}_15seeds_hetzner_20260410`
 
 ## Canonical Remote Roots
 
@@ -83,21 +88,7 @@ Use these patterns when looking for fetched manipulation families:
 - qx6 run-dir base:
   `/export/scratch/iguennou/runs/dsc-epgg-vectorized`
 
-### Completed March 30 qx6 loss-switch control
-
-- batch run dir:
-  `/export/scratch/iguennou/runs/dsc-epgg-vectorized/phase3-vecstraight-qx6-lossswitch-controls-20260330`
-- staged repo root:
-  `/export/scratch/iguennou/staging/dsc-epgg-vectorized/phase3-vecstraight-lossswitch-lite-20260330`
-- arm output roots:
-  `/export/scratch/iguennou/staging/dsc-epgg-vectorized/phase3-vecstraight-lossswitch-lite-20260330/outputs/eval/phase3_vecstraight_sameckpt_continuation_50000_{none_base,none_zeroaux,uniform_zeroaux}_15seeds_iwr_20260330`
-
-### Completed March 30 Hetzner comm × history factorial
-
-- batch run dir:
-  `/root/compute-work/runs/dsc-epgg-vectorized/phase3-vecstraight-comm-history-factorial-parallel-20260330x24`
-- cell output roots:
-  `/root/compute-work/projects/dsc-epgg-vectorized/outputs/train/phase3_vecstraight_comm_history_factorial_{with_comm_full_history,with_comm_reduced_history,without_comm_full_history,without_comm_reduced_history}_15seeds_hetzner_20260330par24`
+For dated completed-run notes, use [`docs/archive/PHASE3_RUN_HISTORY.md`](docs/archive/PHASE3_RUN_HISTORY.md).
 
 ## Fetch Conventions
 
@@ -106,7 +97,7 @@ Use these patterns when looking for fetched manipulation families:
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/hetzner-results/<basename>`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/hetzner-results)
 - Fetch IWR/qx6 eval roots from the relevant staging `outputs/eval/<basename>` into
   [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results/<basename>`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/iwr-results)
-- After fetching a manuscript-facing root, record it here and keep the basename unchanged
+- After fetching a manuscript-facing root, record it here and keep the basename unchanged.
 
 ## Naming Rules
 
@@ -128,5 +119,6 @@ without a family token.
 
 - `cond1` and `cond2` identify the condition only, not the training family.
 - Use this file for path ownership, not for scientific interpretation.
-- Use [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md) for current run-state context.
+- Use [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md) for live status.
 - Use [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md) for the active remaining-work checklist.
+

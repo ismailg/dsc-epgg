@@ -1,51 +1,62 @@
-# MARL-EmeCom: Multi-Agent RL with Emergent Communication in Mixed-Motive Settings
+# MARL-EmeCom: Vectorized DSC-EPGG
 
 **Paper:** *Learning in Public Goods Games: The Effects of Uncertainty and Communication on Cooperation* (Orzan et al. 2025)  
 [Read on SpringerLink](https://link.springer.com/article/10.1007/s00521-024-10530-6)
 
-## Current Repo Orientation
+This repository is the active home of the newer vectorized DSC-EPGG pipeline and the
+`phase3_vecstraight` result family.
 
-This repository started from the broader `marl-emecom` codebase, but the active implementation and
-result family here is the newer vectorized DSC-EPGG pipeline.
-
-Use this repo for:
-
-- the active `src/...` environment, PPO, checkpoint-suite, and analysis code
-- the newer straight `0 -> 150k` vectorized phase-3 family: `phase3_vecstraight`
-- the current paper-facing vecstraight follow-ups and result audits
-
-Do not mix this with the older staged/warm-start phase-3 manuscript family in the sibling repo:
+Do not mix it with the older staged/warm-start manuscript family in the sibling repo:
 
 - [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md)
 
 ## Read First
 
-For current work, start with:
+For current work, open these files in order:
 
-- [`DATA_MAP.md`](DATA_MAP.md): canonical artifact locations and fetch conventions
-- [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md): short handoff note and current gating status
-- [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md): active manuscript-facing checklist
-- [`/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg/PHASE3_RESULT_FAMILIES.md): cross-repo family split
+1. [`AGENTS.md`](AGENTS.md): stable operating rules, parity contract, and cluster policy
+2. [`DATA_MAP.md`](DATA_MAP.md): canonical local/remote artifact paths
+3. [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md): current state and next action
+4. [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md): active paper-facing checklist
+5. [`PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md`](PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md): longer result narrative
 
-Use the following rule everywhere:
+## Active Ownership Model
 
-- `phase3_vecstraight` = the newer straight vectorized family in this repo
-- `phase3_staged` = the older staged/warm-start manuscript family in `dsc-epgg`
-- do not port intervention or mechanism claims across those families unless the analysis was rerun
+Treat the root docs this way:
 
-## Active Code Map
+- [`README.md`](README.md): repo entry point only
+- [`DATA_MAP.md`](DATA_MAP.md): paths only
+- [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md): current state and next step only
+- [`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md): active manuscript checklist only
+- [`PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md`](PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.md): interpretation only
 
-The current implementation lives under `src`, not the older upstream top-level layout.
+Historical implementation plans, stage notes, and older task prompts now live under:
+
+- [`docs/archive/README.md`](docs/archive/README.md)
+
+## Current Code Map
+
+The active implementation lives under `src`:
 
 - `src/environments/pgg/`: vectorized PGG environments
 - `src/wrappers/`: trainer-side observation wrapper and message/history features
 - `src/algos/`: PPO, GAE buffer, policy/value code
 - `src/experiments_pgg_v0/`: training launchers and seed-expansion runners
 - `src/analysis/`: checkpoint suites, summaries, validation, and reporting helpers
+
+Supporting trees:
+
 - `outputs/eval/`: local analysis outputs and summaries
-- `iwr-results/` and `hetzner-results/`: fetched remote mirrors
+- `iwr-results/`: fetched IWR mirrors
+- `hetzner-results/`: fetched Hetzner mirrors
+- `paper/neurips2026_comm_vecstraight/`: active manuscript workspace
 
-## Historical Notes
+## Current Family Split
 
-- [`README_IMPLEMENTATION.md`](README_IMPLEMENTATION.md) is a historical Week 1-2 implementation plan. It is useful for the original staged implementation scope, but it is not the main entry point for current vecstraight phase-3 work.
-- Some older upstream terminology and directory references still appear in parts of the repo. When they disagree with the current phase-3 docs above, prefer the current `src/...` layout and the vecstraight-specific Markdown files.
+Use these names consistently:
+
+- `phase3_vecstraight` = uninterrupted `0 -> 150k` straight vectorized family in this repo
+- `phase3_staged` = older staged/warm-start manuscript family in `dsc-epgg`
+
+Do not port intervention or mechanism claims across those families unless the analysis was rerun.
+

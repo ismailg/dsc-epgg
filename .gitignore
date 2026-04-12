@@ -1,5 +1,9 @@
 __pycache__/
 .pytest_cache/
 .DS_Store
+.Rhistory
+**/.Rhistory
+PHASE3_VECSTRAIGHT_DIDACTIC_OVERVIEW.html
+paper/neurips2026_comm_vecstraight/co_scientist_review_prompt.tex
 iwr-results/
 hetzner-results/

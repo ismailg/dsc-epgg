@@ -1,6 +1,6 @@
 # Phase-3 Vecstraight Didactic Overview
 
-*Last updated: 2026-04-02*
+*Last updated: 2026-04-12*
 
 This note explains the completed vecstraight rerun results in plain terms. It covers the
 **new straight vectorized family** only (`training_family = phase3_vecstraight`, repo =
@@ -9,55 +9,42 @@ This note explains the completed vecstraight rerun results in plain terms. It co
 
 This file is interpretive, not the live status ledger. For current run state and ownership, use
 [`PHASE3_VECSTRAIGHT_NEXT_STEPS.md`](PHASE3_VECSTRAIGHT_NEXT_STEPS.md) and
-[`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md).
+[`PHASE3_VECSTRAIGHT_PAPER_TODO.md`](PHASE3_VECSTRAIGHT_PAPER_TODO.md). For historical
+implementation plans and archived task notes, use [`docs/archive/README.md`](docs/archive/README.md).
 
 **What this covers:** Ten completed evaluation/training stages — frozen endpoints, sender-causal
 probes, expanded intervention suite (with SEMs and public_marginal control), observation-noise
 sweep, message-history grid, low-dimensional mechanism analysis (count-of-ones response,
 sender-identity effects, surrogate model comparison), the corrected same-checkpoint continuation
-ladder, the from-scratch exogenous-channel controls, the qx6 loss-switch repair (quantifying the
-auxiliary-loss confound), and the Hetzner comm x history training factorial.
+ladder, the historical from-scratch exogenous-channel controls, the qx6 loss-switch repair
+(quantifying the auxiliary-loss confound), the Hetzner comm x history training factorial, and the
+clean direct Hetzner `msg_source_mode` family.
 **What this still does not cover:** The joint evaluation grid for the comm x history factorial
 cells and the observability/noise sweep remain pending on the evaluation side.
 
-**March 30 continuation and exogenous status update:** The corrected continuation story is now
-complete for the intended 50k/100k vec-parity branches. In the fetched corrected qx6 100k→150k
-reruns, `sender_shuffle` finishes **above** the learned 150k reference (+11.8 pp at f=3.5,
-sign-flip p=0.1313; +7.7 pp at f=5.0, p=0.0395), while `fixed0` finishes **below** it
-(−10.6 pp at f=3.5, p=0.1177; −13.5 pp at f=5.0, p=0.0116). The corrected qx6 50k→150k ladder
-now adds three distinct outcomes: `sender_shuffle` is above learned (+14.1 pp at f=3.5,
-p=0.0718; +5.8 pp at f=5.0, p=0.2531), `fixed0` is strongly below learned (−19.0 pp at f=3.5,
-p=0.0132; −21.7 pp at f=5.0, p=0.0007), and `public_random` is near learned at f=3.5
-(−1.8 pp, p=0.8239) but below it at f=5.0 (−14.7 pp, p=0.0492). The finished Hetzner 50k→150k
-`uniform` branch is also above learned (+11.3 pp at f=3.5, p=0.2710; +15.7 pp at f=5.0,
-p=0.0082). So the completed continuation ladder is still **heterogeneous**, but not in a way
-that supports a simple learned-code superiority story: constant-zero channels are harmful,
-shared public randomness is not uniformly sufficient, and shuffled or uniform exogenous channels
-can stay above the learned reference in the mean.
+**April 12 clean training-time msg-source update:** The direct exogenous question is now answered
+by a native training-time family rather than the older hybrid forced-channel path. In the completed
+Hetzner `msg_source_mode` family, `uniform` finishes essentially tied with learned communication:
+`75.9%` versus `77.7%` at `f=3.5` and `91.6%` versus `90.2%` at `f=5.0`. But `public_random` is
+much weaker: `36.9%` and `57.6%`, close to the no-comm baseline rather than the learned channel.
+The constant-channel controls are worse still: `fixed0` and `fixed1` both finish below learned at
+both focal multipliers, and below no-comm at `f=5.0`.
 
-The completed from-scratch exogenous controls still show that split observationally, but a same-day
-trainer audit found that these forced-channel runs were not trained under exactly the same objective
-as the base learned family: current `msg_training_intervention != none` runs zero `sign_lambda` and
-`list_lambda`, whereas the base learned family uses `0.1` and `0.1`. So the direct training-time
-`uniform > learned` contrast should now be read as **provisional** rather than final. What remains
-solid already is the ranking inside the forced-channel family itself.
+That means the cleaner story is not "learned communication is uniquely necessary," but also not
+"any random cue works." What seems to matter is rich variable slotwise input that receivers can
+combine with temporal context. A single shared random bit is not enough, and a constant token is
+actively harmful.
 
-Observationally, the completed from-scratch exogenous controls still point the same way, but now
-with a sharper split.
-Canonical `public_random` training reaches 64.9% at f=3.5 and 63.9% at f=5.0, which is +6.0 pp
-versus learned at f=3.5 but −11.3 pp at f=5.0. qx6 `uniform` is much stronger: 74.8% at f=3.5
-and 92.3% at f=5.0, or +15.9 pp and +17.1 pp relative to learned. Canonical `fixed0` reaches only
-49.9% and 49.4%, or −9.0 pp and −25.7 pp relative to learned; at f=5.0 it is below the no-comm
-baseline by −6.9 pp. qx6 `fixed1` is also poor at 44.0% and 46.9%, or −14.8 pp and −28.3 pp
-relative to learned; at f=5.0 it is below no-comm by −9.5 pp. The fetched qx6 `fixed0` replica
-also stays below learned at both focal multipliers (−12.6 pp, −20.9 pp), so the harmful sign is
-stable even though the exact `fixed0` magnitude differs by host. To repair the cross-family
-learned-vs-uniform comparison, a qx6 `50k -> 150k` three-arm loss-switch continuation control is
-now running: `none_base`, `none_zeroaux`, and `uniform_zeroaux`.
+The older March 30 continuation ladder and qx6 loss-switch repair are still useful historically:
+they showed that constant channels are harmful, that auxiliary-loss mismatches were real, and that
+the earlier forced-channel evidence should not be over-read. But the main training-time
+learned-versus-exogenous question now has a cleaner answer from the direct `msg_source_mode`
+family.
 
-Key status file:
+Key status files:
 - [`sameckpt_continuation_summary.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_paper_pivot_20260329_status/sameckpt_continuations/sameckpt_continuation_summary.md)
-- [`channel_control_summary.csv`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_exogenous_channel_controls_status_20260330/report/channel_control_summary.csv)
+- [`sameckpt_continuation_summary.csv`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report/sameckpt_continuation_summary.csv)
+- [`clean_msgsource_summary.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_clean_msgsource_status_20260412/report/clean_msgsource_summary.md)
 
 ---
 
@@ -97,7 +84,7 @@ Sources: intervention_suite_summary.csv in each frozen suite directory.
 
 ## The Questions
 
-The rest of this document answers eight questions, each with its own evaluation stage:
+The rest of this document answers ten questions, each with its own evaluation stage:
 
 1. **Is the channel being used at all?** → Frozen endpoint tests
 2. **Does message content matter, or just the presence of a channel?** → Frozen perturbation tests
@@ -107,6 +94,8 @@ The rest of this document answers eight questions, each with its own evaluation 
 6. **Which observation features drive cooperation?** → Message-history grid
 7. **Is there a low-dimensional structure to how messages work?** → Count-of-ones, sender-identity, surrogate models
 8. **Does token-rate matching explain the comm benefit?** → Public marginal control
+9. **What do the clean direct exogenous controls show?** → Native training-time `msg_source_mode` family
+10. **Does communication substitute for temporal history, or require it?** → From-scratch comm × history factorial
 
 ---
 
@@ -659,20 +648,20 @@ Key files:
 9. **Communication is most protective under adversarial information conditions.** When agents
    are given misleading cues (clamped-high EWMA), no-comm agents collapse to ~28% cooperation
    while comm agents hold at ~63%. Messages buffer against misinformation.
-10. **Three forms of message dependence: stable variable input > coarse content > sender-specific codes.**
-    The bulk of the cross-seed cooperation benefit comes from having stable variable
-    input in the message slots and coarse coordination structure. Rich
-    sender-identity-indexed codes exist within each trained population (up to 98 pp within-seed
-    gaps) but are idiosyncratic — they do not generalise across independently trained seeds.
+10. **Three forms of message dependence: slotwise variation > coarse content > sender-specific codes.**
+    The clean direct msg-source family sharpens the old picture. What matters most at training time
+    is not a portable shared code, but access to rich variable slotwise input. Rich
+    sender-identity-indexed codes still exist within each trained population (up to 98 pp within-seed
+    gaps), but they are idiosyncratic and do not generalise cleanly across independently trained seeds.
     Cross-seed surrogate models perform *worse* with richer message features.
 11. **Token-rate matching does not explain the benefit.** `public_marginal` (matching the
     learned global token frequency) performs nearly identically to `public_random` (fair coin).
     The learned protocol's advantage is not about having the right *distribution* of tokens.
-12. **The auxiliary-loss confound was real and large.** Zeroing the auxiliary communication
-    losses (sign_lambda and list_lambda) while keeping everything else the same costs −16 pp
-    at f=3.5. The old "uniform beats learned everywhere" does not survive; the clean statement
-    is that uniform exceeds the learned reference only at f=5.0 (+7.6 pp, p=0.154) under
-    matched training objectives.
+12. **The clean direct exogenous result is sharper than the old continuation evidence.**
+    Native `uniform` messages finish essentially tied with learned communication at both focal
+    multipliers, while `public_random` is much weaker and constant channels are harmful.
+    So the channel's value is not explained by a single shared random cue or by constant token
+    presence alone.
 13. **Communication requires temporal context.** In the from-scratch comm × history factorial,
     communication provides a +15.7 pp advantage at f=3.5 under full history but only +1.9 pp
     under reduced history. At f=5.0, the advantage vanishes entirely (−0.1 pp). Messages
@@ -683,9 +672,6 @@ Key files:
     (+6.4 pp) and comparable to same-seed natural (58.6%). Roughly half the seed pairs
     need the flip. This means the "conventions don't transfer" claim was too strong; a
     coarse polarity convention IS portable, but fine-grained sender-indexed patterns are not.
-    communication provides a +15.7 pp advantage at f=3.5 under full history but only +1.9 pp
-    under reduced history. At f=5.0, the advantage vanishes entirely (−0.1 pp). Messages
-    don't substitute for history — they depend on it.
 
 ### The right mental model
 
@@ -693,11 +679,11 @@ Communication in this environment is useful but conditional. The agents learned 
 depend on the message channel, but they did not converge on a tight, efficient signaling
 system. The protocol is more like a "messy but helpful habit" than a "clean emergent language."
 
-The three forms of message dependence sharpen this: **form 1** (stable variable signal input)
-provides a coordination anchor that transfers across seeds. **Form 2** (coarse content) adds
-modest regime information at f=5.0 but is nearly inert at f=3.5. **Form 3** (rich
-sender-specific codes) is where the within-population "private language" lives — powerful
-within a seed, invisible across seeds, and not what drives the average treatment effect.
+The three forms of message dependence sharpen this: **form 1** (rich variable slotwise input)
+provides most of the training-time benefit. **Form 2** (coarse content) adds modest regime
+information at the endpoint. **Form 3** (rich sender-specific codes) is where the
+within-population "private language" lives — powerful within a seed, invisible across seeds,
+and not what drives the average treatment effect.
 
 Two critical qualifiers now apply:
 
@@ -707,74 +693,68 @@ Messages don't substitute for history — they complement it. The channel's valu
 it depends on the agent having enough temporal observation scaffold to meaningfully integrate
 message input.
 
-**Auxiliary training losses matter for training-time comparisons.** The loss-switch repair
-shows that the `sign_lambda` and `list_lambda` auxiliary losses provided a substantial
-training-time boost (−16 pp at f=3.5 when zeroed). Under matched training objectives,
-uniform exogenous channels modestly exceed learned communication only at f=5.0 (+7.6 pp),
-not at f=3.5. The regime-dependent pattern is therefore: at f=5.0 (cooperation-dominant),
-exogenous variation provides a real benefit; at f=3.5 (mixed-motive), learned content
-may matter more.
+**A single shared random cue is not enough.** The clean direct msg-source family shows a strong
+split: `uniform` is near learned, but `public_random` is near no-comm, and `fixed0` / `fixed1`
+are harmful. So the training-time benefit is not "portable semantics" and not "just give the
+agents one public coin flip." It looks more like a history-conditioned variable-input scaffold.
 
 ---
 
-## Question 9: Did the auxiliary-loss confound drive the "uniform > learned" result?
+## Question 9: What do the clean direct exogenous controls show?
 
-*Added 2026-04-01 after the qx6 loss-switch repair batch.*
+*Added 2026-04-12 after the completed Hetzner clean `msg_source_mode` family.*
 
 ### What is this test?
 
-The original from-scratch exogenous controls trained `uniform` (and other exogenous
-channels) with `sign_lambda=0.0` and `list_lambda=0.0`, while the base learned condition
-used `sign_lambda=0.1` and `list_lambda=0.1`. These auxiliary losses — a message-entropy
-regularizer and a listening bonus — shape the training objective. The loss-switch repair
-runs `none_base`, `none_zeroaux`, and `uniform_zeroaux` from the **same 50k checkpoint**
-using the vectorized continuation pipeline, so the only difference between `none_base`
-and `none_zeroaux` is whether the auxiliary communication losses are active.
+This family asks the clean training-time question directly:
+
+- keep the environment, receiver architecture, wrapper, optimizer, schedules, and evaluation
+  contract fixed
+- train from scratch
+- change only the source of the message stream
+
+The five arms are:
+
+- `learned`: standard learned sender policy
+- `uniform`: independent random bits in each sender slot
+- `public_random`: one shared random bit copied into every sender slot
+- `fixed0` / `fixed1`: constant tokens
+- `no_comm`: the usual communication-off baseline, taken from the learned suite's `cond2`
 
 ### Results at 150k (15 seeds)
 
-| Condition | f=3.5 coop | f=5.0 coop | Training objective |
+| Condition | f=3.5 coop | f=5.0 coop | How to read it |
 | --- | ---: | ---: | --- |
-| **none_base** (learned, full aux) | 71.0% | 79.1% | PPO + sign + listener |
-| **none_zeroaux** (learned, zero aux) | 55.0% | 74.4% | PPO only |
-| **uniform_zeroaux** (uniform, zero aux) | 68.7% | 86.7% | PPO only |
-| **no_comm** (baseline) | 42.3% | 56.2% | PPO only (no messages) |
-
-Paired contrasts against none_base:
-
-| Contrast | f=3.5 delta | p | f=5.0 delta | p |
-| --- | ---: | ---: | ---: | ---: |
-| none_zeroaux vs none_base | −16.0 pp | 0.082 | −4.7 pp | 0.361 |
-| uniform_zeroaux vs none_base | −2.4 pp | 0.801 | +7.6 pp | 0.154 |
+| **learned** | 77.7% | 90.2% | native learned messages |
+| **uniform** | 75.9% | 91.6% | rich slotwise random variation |
+| **public_random** | 36.9% | 57.6% | one shared random bit |
+| **fixed0** | 26.4% | 46.7% | constant token 0 |
+| **fixed1** | 14.2% | 46.5% | constant token 1 |
+| **no_comm** | 42.3% | 56.2% | no channel |
 
 ### In plain English
 
-**The auxiliary-loss confound was real and large.**
+**Uniform random messages work almost as well as learned communication.** At `f=3.5`, `uniform`
+finishes only `1.8 pp` below learned. At `f=5.0`, it finishes `1.4 pp` above learned. So the
+channel's value is not coming mainly from a portable learned code.
 
-Removing the auxiliary communication losses while keeping everything else the same costs
-**−16 pp at f=3.5** and −4.7 pp at f=5.0. This means a substantial part of the original
-learned baseline's performance came from the auxiliary training signal, not just from the
-learned message content.
+**But not every random cue works.** `public_random` is far below learned at both focal
+multipliers (`-40.8 pp` at `f=3.5`, `-32.5 pp` at `f=5.0`) and is only near the no-comm
+baseline. So a single shared public bit does not reproduce the training-time benefit.
 
-**The old "uniform beats learned everywhere" story does not survive.** Under the matched
-zero-aux objective, `uniform_zeroaux` (68.7%) does NOT beat `none_base` (71.0%) at f=3.5.
-The apparent uniform dominance at f=3.5 in the original exogenous runs was substantially
-inflated by the auxiliary-loss confound.
+**Constant cues are actively bad.** `fixed0` and `fixed1` are below learned in all 15 seeds at
+both focal multipliers, and at `f=5.0` both finish below no-comm. This means the benefit is not
+just "having something in the message slots."
 
-**But uniform still genuinely helps at f=5.0.** `uniform_zeroaux` (86.7%) exceeds
-`none_base` (79.1%) by +7.6 pp, and it massively exceeds `none_zeroaux` (74.4%) by
-+12.3 pp. So the regime-dependent story sharpens: at the cooperation-dominant regime,
-exogenous high-entropy variation provides a real training-time benefit that is not explained
-by the auxiliary-loss difference. At the mixed-motive regime, the evidence is much weaker.
-
-**Caveat:** The sign-flip p-value for `uniform_zeroaux` vs `none_base` at f=5.0 is 0.154,
-so the effect is suggestive but not yet statistically robust by conventional standards.
-The continuation also uses a hybrid sender/delivered-message intervention path, which
-introduces a secondary implementation concern.
+**The clean statement is now sharper than the old continuation story.** What seems to matter is
+rich variable slotwise input that can be combined with the rest of the observation stream and with
+temporal context. That is closer to a history-conditioned coordination scaffold than to a portable
+shared language.
 
 Key files:
-- [`sameckpt_continuation_summary.csv`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report/sameckpt_continuation_summary.csv)
-- [`sameckpt_continuation_paired_stats.csv`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_lossswitch_controls_status_20260401/report/sameckpt_continuation_paired_stats.csv)
+- [`clean_msgsource_summary.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_clean_msgsource_status_20260412/report/clean_msgsource_summary.md)
+- [`channel_control_summary.csv`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_clean_msgsource_status_20260412/report/channel_control_summary.csv)
+- [`channel_control_raw.csv`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/outputs/eval/phase3_vecstraight_clean_msgsource_status_20260412/report/channel_control_raw.csv)
 
 ---
 
@@ -973,14 +953,10 @@ The noise sweep, history grid, and low-dim mechanism analysis tell us *what* inf
 drives decisions and how. They do **not** tell us:
 
 - **Why does uniform help specifically at f=5.0 but not f=3.5?** The loss-switch repair
-  shows that under matched zero-aux training, uniform exceeds the learned reference at
-  f=5.0 (+7.6 pp) but not at f=3.5 (−2.4 pp). This regime-dependent pattern needs a
-  mechanistic explanation. One candidate: at f=5.0, where cooperation is individually
-  rational, exogenous variation provides a low-cost coordination scaffold; at f=3.5,
-  where the dilemma is sharper, state-conditioned content may matter more.
-- **Is the hybrid forced-channel implementation clean enough?** The current continuation
-  pipeline uses a sender/delivered-message hybrid for forced channels. A cleaner
-  direct exogenous-channel implementation would strengthen the training-time claims.
+  and the clean direct family together now show that `uniform` is near learned at both
+  focal multipliers, but `public_random` is not. The unresolved mechanistic question is
+  no longer "does exogenous input help?"; it is "why does rich slotwise variation work
+  while a single shared random bit fails?"
 - **When did the three layers emerge during training?** Was layer 1 (channel presence)
   established early and layers 2–3 added later? Or did they co-develop? The 50k→150k
   comparison hints at gradual development, but we need finer temporal resolution.
@@ -998,13 +974,16 @@ The remaining open questions are:
 2. **Observability / noise sweep** (evaluation-time, not yet started): Crossing evaluation-time
    noise with the base and factorial families to separate information-transfer from pure
    coordination effects.
-3. **Cleaner exogenous-channel implementation** (optional): Whether to implement a direct
-   exogenous-channel training path that avoids the hybrid sender/delivered-message issue
-   in the current continuation pipeline.
+3. **Mechanism audit for the clean msg-source split** (optional): Analyse why `uniform`
+   nearly matches learned communication while `public_random` and constant cues fail.
+   The likely axes are slot identity, temporal conditioning, and whether receivers use
+   the multi-slot pattern rather than a single shared cue.
 
 Treat this overview as a **completed endpoint + mechanism decomposition + training-time
-confound-repair + history-interaction + cross-seed-transfer story**. The loss-switch repair
-quantifies the auxiliary-loss confound; the comm × history factorial establishes that
-communication requires temporal context; the cross-seed transfer suite shows that conventions
-transfer partially with a 1-bit polarity alignment but not as raw unaligned streams. The
-evaluation-side audit and observability sweep remain pending.
+confound-repair + clean direct msg-source + history-interaction + cross-seed-transfer story**.
+The loss-switch repair quantifies the auxiliary-loss confound; the clean direct family shows
+that high-entropy slotwise exogenous input can nearly match learned communication while one
+shared random bit cannot; the comm × history factorial establishes that communication requires
+temporal context; and the cross-seed transfer suite shows that conventions transfer partially
+with a 1-bit polarity alignment but not as raw unaligned streams. The evaluation-side audit
+and observability sweep remain pending.
