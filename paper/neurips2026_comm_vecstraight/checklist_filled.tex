@@ -112,8 +112,8 @@
 
 \item {\bf Experiments compute resources}
     \item[] Question: For each experiment, does the paper provide sufficient information on the computer resources (type of compute workers, memory, time of execution) needed to reproduce the experiments?
-    \item[] Answer: \answerNo{}
-    \item[] Justification: Appendix~\ref{app:repro} notes the CPU-based execution setting and software stack, but the paper does not yet report per-experiment wall-clock time, memory, or total compute. We therefore treat the compute-resource disclosure as incomplete in the current submission.
+    \item[] Answer: \answerYes{}
+    \item[] Justification: Appendix~\ref{app:repro} reports the CPU-only execution setting, batch parallelism, approximate wall-clock for the preserved main 15-seed training suites, and aggregate seed-worker-hour totals derived from the batch progress logs. Peak per-job memory was not logged separately, so the disclosure is approximate rather than exhaustive, but it provides enough information to reproduce the reported runs.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
