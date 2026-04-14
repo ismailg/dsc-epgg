@@ -1,5 +1,7 @@
 ---
-title: "Communication Without Portable Codes: Variable Signals and History Gating in a Social Dilemma"
+title: |
+  What Does Emergent Communication Actually Communicate?
+  Separating Channel Structure from Learned Content in a Social Dilemma
 author:
   - name: Anonymous
     affiliation:
@@ -17,7 +19,7 @@ header-includes:
   - \providecommand{\fhat}{\hat{f}}
   - \AtBeginDocument{\captionsetup[subtable]{labelformat=empty}\captionsetup[subfigure]{labelformat=empty}}
 abstract: |
-  In multi-agent reinforcement learning, agents trained with a communication channel cooperate more---but does the gain reflect a portable shared code, or something simpler? We study this in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Communication increases cooperation substantially (+16--19 percentage points). Yet three lines of evidence show that the benefit is not explained by learned sender content alone. First, in matched from-scratch training that varies only the message source, independent random messages (one per sender slot) nearly match learned communication, while a single shared random bit and constant channels do not---implicating slotwise input variation rather than portable sender semantics. Second, a $2 \times 2$ factorial crossing communication with temporal history features shows that the communication advantage requires those features: without recent temporal context, it shrinks to near zero and agents attend less to messages, not more. Third, within trained populations, senders exert strong effects on receivers but often use opposite token polarities, so these effects cancel in aggregate; across independently trained populations, conventions fragment and do not transfer under simple alignment rules. Together, these results suggest the channel acts as a history-conditioned variable-input scaffold---a source of per-timestep, sender-indexed variation whose value depends on receivers having temporal state with which to interpret it---rather than a portable shared code or a minimal shared random cue.
+  When agents trained with a communication channel cooperate more than those trained without one, the standard conclusion is that they have learned a meaningful shared code. But how should this be evaluated? We study this question in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Communication increases cooperation substantially (+16--19 percentage points), yet three lines of evidence show that the benefit is not explained by learned message content. First, independent random messages---one per sender slot, carrying no learned meaning---nearly match learned communication during training; a single shared random bit does not. What matters is per-sender variation, not what agents have learned to say. Second, the communication advantage disappears when agents lack recent temporal history features: messages help only when receivers already have context with which to interpret varying input. Third, sender-specific conventions are strong within a trained group but do not transfer to new partners; aggregate statistics mask this structure because opposite-polarity senders cancel each other out. Together, these results suggest the channel acts as a history-conditioned variable-input scaffold rather than a portable shared code. The broader lesson is methodological: measuring what a trained policy depends on is not the same as measuring what mattered during training, and standard aggregate metrics can miss the structure that actually drives behavior. We propose an evaluation framework that separates training-time channel sufficiency from endpoint dependence and tests portability directly.
 keywords:
   - emergent communication
   - multi-agent reinforcement learning
@@ -1825,9 +1827,11 @@ print(
 
 Each family targets a distinct estimand; together they triangulate the mechanism across training-time contrasts, frozen-policy dependence, and cross-seed portability. Appendix \ref{app:alignment} extends this with a detailed evidence guide showing what each family can and cannot identify.
 
+Underlying this design is a simple question: what would count as evidence that agents have learned meaningful communication, rather than merely benefiting from a channel? We test four properties. \emph{Content dependence}: does the benefit require learned message content, or can unstructured variation substitute? (Families 1--2.) \emph{Contextual independence}: does the channel help on its own, or only when receivers have other information to combine it with? (Family 3.) \emph{Receiver influence}: do individual messages causally affect receivers? (Families 4--5.) \emph{Portability}: do the learned conventions transfer to new partners? (Family 6.) A channel that passes all four tests looks like a shared code; one that passes only some looks like something simpler. Our results show the channel in this setting passes the third test but fails the first, second, and fourth.
+
 # Results {#sec-results}
 
-## Message-source controls and the communication gap {#sec-main-result}
+## Independent random messages match learned communication {#sec-main-result}
 
 We begin with the descriptive communication gap. Panels A--B of Figure \ref{fig-training-panels} compare separately trained \texttt{comm} and \texttt{no-comm} conditions (full checkpoint table in Appendix \ref{app:frozen50k}). Because the two conditions differ jointly in message observations, actions, auxiliary losses, and the induced optimization path, this comparison establishes the phenomenon but does not identify the mechanism.
 
@@ -2004,7 +2008,7 @@ print(
 
 Communication's training-time value is therefore not intrinsic to the channel; in these feed-forward agents, it requires explicit temporal features to be useful. This finding is linked to the source-mode result above: because the channel functions primarily as a source of varying input rather than a semantic signal, receivers need temporal context to make that variation actionable. If messages carried genuinely portable content---for example, a reliable encoding of the current regime---the dependence on temporal features might weaken.
 
-## Endpoint message-input sensitivity {#sec-frozen-endpoint}
+## The trained policy depends on variable input, not learned content {#sec-frozen-endpoint}
 
 The preceding experiments asked what matters during training. Here the question is different: once agents are fully trained, what aspects of the message channel do they actually rely on? To answer this, we freeze the learned 150k policy and substitute different message streams at evaluation time, measuring how cooperation changes. This separates endpoint dependence from training-time sufficiency. (Analogous 50k comparisons appear in Appendix \ref{app:frozen50k}.) Throughout, \texttt{natural} denotes the unperturbed learned stream. Table \ref{tbl-endpoint-interventions} defines the evaluation-time manipulations used in this section.
 
@@ -2250,7 +2254,7 @@ no_pred_50 = pct_math(nonoracle_value('weighted_slot_sign', '5.0', 'predicted_me
 no_oracle_35 = pct_math(transfer_value('3.5', 'foreign_best_aligned_mean'))
 no_oracle_50 = pct_math(transfer_value('5.0', 'foreign_best_aligned_mean'))
 print(
-    f"Without polarity alignment, foreign streams do not outperform random controls. The post hoc pair-specific flip sets an upper bound ({no_oracle_35} at $f=3.5$, {no_oracle_50} at $f=5.0$), but simple pre-specified polarity rules recover little of that advantage ({no_pred_35} and {no_pred_50}). Most of the gap reflects pair-specific selection rather than a recoverable convention (full transfer tables in Appendix \\ref{{app:alignment}})."
+    f"Foreign message streams do not help unfamiliar receivers: without any adjustment, a receiver fed messages from a different seed cooperates no more than one fed random messages. We also tested whether a simple correction could fix the mismatch---since different seeds may assign opposite meanings to the same token, we tried flipping all bits ($0 \\leftrightarrow 1$) and keeping whichever version worked better for each receiver--donor pair. This generous upper bound reaches {no_oracle_35} cooperation at $f=3.5$ and {no_oracle_50} at $f=5.0$, but it is chosen after seeing the outcome and cannot be achieved in practice. When we instead try to predict which pairs need flipping using each seed's sender statistics, the result ({no_pred_35} and {no_pred_50}) is no better than raw unaligned transfer. The apparent transferability under the best-case flip is therefore an artifact of pair-by-pair selection, not a convention that a simple rule can recover (full transfer tables in Appendix \\ref{{app:alignment}})."
 )
 ```
 
@@ -2260,7 +2264,7 @@ A complementary surrogate analysis confirms this: when we train simple predictiv
 
 The standard account of emergent communication assumes that agents learn a shared code whose semantic content drives coordination. Our results show that this account is incomplete---and that the conclusion one draws depends critically on how one evaluates.
 
-**Evaluating effectiveness is not evaluating mechanism.** A comm-vs-no-comm comparison establishes that the channel helps, but cannot say why, since communication also changes inputs, losses, and the optimization path. To attribute gains to learned content, one needs message-source controls that hold everything else fixed. In our setting, independent random messages largely match learned communication, showing that much of the benefit comes from structured input variation rather than portable semantics. The critical channel property is pattern richness: four independent binary draws yield $2^4 = 16$ distinguishable slot-indexed patterns per timestep, whereas a single shared public bit yields only two. The former nearly matches learned communication; the latter stays near no-comm; constant channels are worse still.
+**Evaluating effectiveness is not evaluating mechanism.** A comm-vs-no-comm comparison establishes that the channel helps, but cannot say why, since communication also changes inputs, losses, and the optimization path. To attribute gains to learned content, one needs message-source controls that hold everything else fixed. In our setting, independent random messages largely match learned communication, showing that much of the benefit comes from structured input variation rather than portable semantics.
 
 **Evaluating communication in context.** The communication $\times$ history factorial shows that variable input alone is not sufficient: the channel's benefit disappears without temporal observation features. Messages and temporal state are complements, not substitutes---agents without a temporal anchor treat message variation as noise rather than leaning harder on it. A pure portable-code account would predict weaker dependence on temporal features than we observe, since a meaningful regime signal should be interpretable without knowing recent group behavior.
 
@@ -2275,7 +2279,7 @@ print(
 )
 ```
 
-**Evaluating portability.** The conventions that emerge are not only non-portable across seeds; they are often incompatible. Different senders within the same population assign opposite meanings to the same token---which is why aggregate metrics read as near-zero even when per-sender effects are large. Across populations, simple polarity-alignment rules do not recover the post hoc transfer upper bound, and richer surrogate features hurt held-out generalization (Table \ref{tbl-lowdim-surrogate}). The channel supports a family of functionally equivalent but structurally incompatible sender--receiver mappings---sender-indexed dialects that do not generalize [@hu2020other; @bullard2021quasi].
+**Evaluating portability.** Cross-seed transfer confirms the same picture: learned conventions do not generalize to new partners, simple polarity-alignment rules cannot recover the post hoc transfer upper bound, and richer sender-aware surrogate features hurt rather than help held-out prediction (Table \ref{tbl-lowdim-surrogate}). The channel supports functionally equivalent but structurally incompatible sender--receiver mappings that do not transfer [@hu2020other; @bullard2021quasi].
 
 ```{python}
 #| echo: false
@@ -2285,7 +2289,7 @@ print(
 )
 ```
 
-**Evaluation recommendations.** These results suggest that evaluating emergent communication requires at minimum: (i) message-source controls to test whether learned content is necessary, (ii) separation of training-time and endpoint analyses, since they can give opposite conclusions about the same channel, (iii) interaction tests with representational features such as temporal state, and (iv) cross-population transfer tests to assess portability. The gap between learned and random messages bounds the content contribution; the gap between same-seed and cross-seed performance bounds convention portability. The individual ingredients of this analysis are not new---fragile conventions [@hu2020other; @bullard2021quasi], misleading metrics [@lowe2019pitfalls; @kharitonov2019entropy], and coordination via thin signals [@aumann1974subjectivity; @duffy2017sunspots] have all been documented. The contribution is to show how they interact in one controlled setting and why distinct experiment families are needed to disentangle them.
+**Evaluation recommendations.** These results suggest that evaluating emergent communication requires at minimum: (i) message-source controls to test whether learned content is necessary, (ii) separation of training-time and endpoint analyses, since they can give opposite conclusions about the same channel, (iii) interaction tests with representational features such as temporal state, and (iv) cross-population transfer tests to assess portability. The gap between learned and random messages bounds the content contribution; the gap between same-seed and cross-seed performance bounds convention portability.
 
 ## Limitations
 
