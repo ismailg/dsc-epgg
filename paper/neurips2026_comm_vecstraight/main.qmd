@@ -13,13 +13,14 @@ header-includes:
   - \usepackage{enumitem}
   - \usepackage{multirow}
   - \usepackage{float}
+  - \raggedbottom
   - \providecommand{\pp}{\,\mathrm{pp}}
   - \renewcommand{\pp}{\,\mathrm{pp}}
   - \providecommand{\commgap}{\Delta_{\mathrm{comm}}}
   - \providecommand{\fhat}{\hat{f}}
   - \AtBeginDocument{\captionsetup[subtable]{labelformat=empty}\captionsetup[subfigure]{labelformat=empty}}
 abstract: |
-  When agents trained with a communication channel cooperate more than those trained without one, the standard conclusion is that they have learned a meaningful shared code. But how should this be evaluated? We study this question in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Communication increases cooperation substantially (+16--19 percentage points), yet three lines of evidence show that the benefit is not explained by learned message content. First, independent random messages---one per sender slot, carrying no learned meaning---nearly match learned communication during training; a single shared random bit does not. What matters is per-sender variation, not what agents have learned to say. Second, the communication advantage disappears when agents lack recent temporal history features: messages help only when receivers already have context with which to interpret varying input. Third, sender-specific conventions are strong within a trained group but do not transfer to new partners; aggregate statistics mask this structure because opposite-polarity senders cancel each other out. Together, these results suggest the channel acts as a history-conditioned variable-input scaffold rather than a portable shared code. The broader lesson is methodological: measuring what a trained policy depends on is not the same as measuring what mattered during training, and standard aggregate metrics can miss the structure that actually drives behavior. We propose an evaluation framework that separates training-time channel sufficiency from endpoint dependence and tests portability directly.
+  When agents trained with a communication channel cooperate more than those trained without one, the standard conclusion is that they have learned a meaningful shared code. But how should this be evaluated? We study this question in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Communication increases cooperation substantially (+16--19 percentage points), yet three lines of evidence suggest that the benefit arises primarily from channel structure rather than learned content. First, in this binary-vocabulary setting, independent random messages---one per sender slot---nearly match learned communication during training; a single shared random bit does not. Second, the communication advantage disappears when agents lack recent temporal history features: messages help only when receivers already have context with which to interpret varying input. Third, sender-specific conventions are strong within a trained group but do not transfer to new partners; aggregate statistics mask this structure because opposite-polarity senders cancel each other out. Together, these results suggest the channel acts as a history-conditioned variable-input scaffold rather than a portable shared code. The broader lesson is methodological: measuring what a trained policy depends on is not the same as measuring what mattered during training, and standard aggregate metrics can miss the structure that actually drives behavior. We propose an evaluation framework that separates training-time channel sufficiency from endpoint dependence and tests portability directly, yielding a graded evidence profile rather than a single verdict.
 keywords:
   - emergent communication
   - multi-agent reinforcement learning
@@ -967,9 +968,9 @@ def semantics_value(checkpoint_episode, field):
 
 # --- Table renderers ---
 
-def render_table_here(label, caption, body):
+def render_table_here(label, caption, body, position="H"):
     lines = [
-        r"\begin{table}[H]",
+        fr"\begin{{table}}[{position}]",
         rf"\caption{{\label{{{label}}}{caption}}}",
         body,
         r"\end{table}",
@@ -1044,22 +1045,23 @@ def render_base_gap_table():
 def render_eval_design_table():
     lines = [
         r"\centering",
-        r"\small",
-        r"\begin{tabular}{clll}",
+        r"\footnotesize",
+        r"\setlength{\tabcolsep}{3pt}",
+        r"\begin{tabular*}{\linewidth}{@{\extracolsep{\fill}}p{3.35cm}p{4.85cm}p{2.35cm}c}",
         r"  \toprule",
-        r"  \# & Family & Question & Section \\",
+        r"  Family & Question & Property & Section \\",
         r"  \midrule",
         r"  \multicolumn{4}{l}{\emph{Training-time evidence}} \\",
-        r"  1 & Base comm / no-comm gap & Does communication help? & \ref{sec-main-result} \\",
-        r"  2 & From-scratch source-mode controls & Is learned content uniquely necessary? & \ref{sec-main-result} \\",
-        r"  3 & Comm $\times$ history factorial & Does the benefit require temporal features? & \ref{sec-factorial} \\",
+        r"  Base comm / no-comm gap & Does communication help at all? & --- & \ref{sec-main-result} \\",
+        r"  Source-mode controls & Is learned content uniquely necessary? & Content dependence & \ref{sec-main-result} \\",
+        r"  Comm $\times$ history factorial & Does the channel help without temporal context? & Standalone value & \ref{sec-factorial} \\",
         r"  \midrule",
         r"  \multicolumn{4}{l}{\emph{Endpoint and transfer evidence}} \\",
-        r"  4 & Frozen-policy interventions & What channel properties does the policy use? & \ref{sec-frozen-endpoint} \\",
-        r"  5 & Single-slot sender probes & How large are individual sender effects? & \ref{sec-sender-probes} \\",
-        r"  6 & Cross-seed transfer & Do conventions generalize across populations? & \ref{sec-lowdim} \\",
+        r"  Frozen interventions & What channel properties does the trained policy use? & Content dependence & \ref{sec-frozen-endpoint} \\",
+        r"  Sender probes & Do individual messages causally affect receivers? & Receiver influence & \ref{sec-sender-probes} \\",
+        r"  Cross-seed transfer & Do learned conventions generalize to new partners? & Portability & \ref{sec-lowdim} \\",
         r"  \bottomrule",
-        r"\end{tabular}",
+        r"\end{tabular*}",
     ]
     return "\n".join(lines)
 
@@ -1748,25 +1750,27 @@ def render_nonoracle_transfer_table():
 
 # Introduction {#sec-intro}
 
+AI agents are increasingly deployed in shared environments where they must coordinate despite being trained independently and having potentially conflicting incentives. These agents are often given communication channels and assumed to use them meaningfully. But if the communication that emerges turns out to be non-portable, partner-specific, and dependent on representational scaffolding rather than learned content, that assumption needs testing.
+
 When agents trained with a communication channel cooperate more than those trained without one, what should we conclude? The standard interpretation is that agents have learned a shared code: senders encode task-relevant information, receivers decode it, and the resulting coordination reflects the semantic content of the messages [@foerster2016learning; @sukhbaatar2016learning; @lazaridou2017multi; @havrylov2017emergence; @mordatch2018emergence]. This interpretation is usually evaluated with endpoint metrics---cooperation rates, mutual information between messages and task variables, topographic similarity---applied at the final training checkpoint [@lazaridou2020emergent].
 
 But these metrics can mislead. Effective communication need not be interpretable [@kottur2017natural], aggregate statistics can mask what individual sender--receiver pairs are doing [@lowe2019pitfalls; @benzion2024pitfalls], and under independent learning, non-stationarity makes it difficult to separate message semantics from broader training dynamics [@papoudakis2019dealing; @oroojlooyjadid2022review]. @kharitonov2019entropy found that shuffling sender messages caused no performance loss and concluded that receivers ignored the channel---yet shuffle-insensitivity could also arise when receivers depend on messages but not on learned sender content specifically. More fundamentally, a parallel literature on coordination devices shows that even meaningless exogenous signals can aid cooperation by serving as shared random cues [@aumann1974subjectivity; @duffy2017sunspots]. Taken together, these findings raise a sharper question than whether communication "works": how much of the benefit comes from portable sender content, how much from the structural properties of having a variable-input channel, and what evaluation is needed to tell the difference?
 
-We study this question in a four-agent extended public goods game with hidden regime switching, noisy private observations, and optional binary communication [@orzan2024pgg]. The game's hidden multiplier creates multiple strategic regimes within a single task, allowing us to evaluate communication under changing incentive conditions without requiring multiple separate games. Because the latent regime, sender identity, message stream, and actions are all controlled and logged, we can compare training-time channel sufficiency, endpoint message dependence, and cross-seed portability using six complementary experiment families.
+We study this question in a four-agent extended public goods game with hidden regime switching, noisy private observations, and optional binary communication [@orzan2024pgg]. Because the latent regime, sender identity, message stream, and actions are all controlled and logged, we can compare training-time channel sufficiency, endpoint message dependence, and cross-seed portability using six complementary experiment families.
 
-Communication increases cooperation substantially (+16--19 percentage points). Yet three lines of evidence show that the gain is not explained by learned sender content alone. Independent random messages nearly match learned communication during training, as long as each sender slot provides its own varying signal. The communication advantage disappears when agents lack recent temporal history features. And within trained populations, sender-specific conventions fragment and do not transfer across independently trained groups.
+Communication increases cooperation substantially (+16--19 percentage points). But does that gain reflect meaningful communication? We propose evaluating four properties. *Content dependence*: does the benefit require learned message content, or can unstructured variation substitute? *Standalone value*: does the channel help on its own, or only when receivers already have temporal context to interpret it? *Receiver influence*: do individual messages causally affect receivers? *Portability*: do the learned conventions transfer to new partners? A channel that scores high on all four looks like a shared code. In our setting, the evidence is graded: receiver influence is strong, but content dependence is weak in this binary-vocabulary setting, the channel provides little value without temporal features, and conventions do not transfer under simple alignment rules.
 
 The paper makes three contributions:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
-  \item \textbf{An evaluation framework} that separates training-time value (what message properties matter for learning) from endpoint dependence (what the trained policy uses), showing that these can give opposite conclusions about the same channel.
-  \item \textbf{Empirical evidence} that communication's benefit in this setting arises primarily from independent slotwise variation interacting with temporal observation features, rather than from portable semantic content.
-  \item \textbf{A set of complementary experiment families}---message-source controls, communication--history factorials, sender probes, and cross-seed transfer tests---that concretely instantiate the framework.
+  \item \textbf{An evaluation framework} built around these four properties, with a corresponding experiment family for each (Table \ref{tbl-eval-design}), showing that the distinction between training-time value and endpoint dependence is necessary because the two can give different---and sometimes conflicting---conclusions about the same channel.
+  \item \textbf{A graded evidence profile} showing that in this binary-vocabulary setting, the channel exhibits strong receiver influence but weak content dependence, little standalone value without temporal features, and poor portability under direct transfer.
+  \item \textbf{A set of complementary experiment families}---message-source controls, communication--history factorials, sender probes, and cross-seed transfer tests---that other researchers can apply to evaluate emergent communication in their own settings.
 \end{enumerate}
 ```
 
-The broader methodological point is that how you evaluate communication determines what you conclude about it. Measuring what a trained policy depends on is not the same as measuring what mattered during training---and the two can give opposite answers. In this setting, the channel functions not as a portable shared code but as a source of varying input whose value depends on receivers having recent temporal context with which to interpret it.
+The four-property framework and the corresponding experiment families are designed to be applied wherever emergent communication is claimed.
 
 # Related work {#sec-related}
 
@@ -1825,9 +1829,7 @@ print(
 )
 ```
 
-Each family targets a distinct estimand; together they triangulate the mechanism across training-time contrasts, frozen-policy dependence, and cross-seed portability. Appendix \ref{app:alignment} extends this with a detailed evidence guide showing what each family can and cannot identify.
-
-Underlying this design is a simple question: what would count as evidence that agents have learned meaningful communication, rather than merely benefiting from a channel? We test four properties. \emph{Content dependence}: does the benefit require learned message content, or can unstructured variation substitute? (Families 1--2.) \emph{Contextual independence}: does the channel help on its own, or only when receivers have other information to combine it with? (Family 3.) \emph{Receiver influence}: do individual messages causally affect receivers? (Families 4--5.) \emph{Portability}: do the learned conventions transfer to new partners? (Family 6.) A channel that passes all four tests looks like a shared code; one that passes only some looks like something simpler. Our results show the channel in this setting passes the third test but fails the first, second, and fourth.
+Each family targets a distinct estimand and maps onto one or more of the four evaluation properties defined in Section \ref{sec-intro}; together they triangulate the mechanism across training-time contrasts, frozen-policy dependence, and cross-seed portability. Appendix~\ref{app:alignment} extends this with a detailed evidence guide showing what each family can and cannot identify.
 
 # Results {#sec-results}
 
@@ -1964,7 +1966,7 @@ print(
 )
 ```
 
-**Which channel properties are sufficient?** \label{sec-clean-msgsource} This family targets a different estimand from the base gap. All communication-enabled arms train under a common zero-auxiliary objective (\texttt{sign\_lambda}=\texttt{list\_lambda}=0), so the design difference is message source, not communication-specific shaping. Architecture, observation wrapper, and optimizer are matched; a \texttt{no-comm} arm serves as baseline. Because this family uses a different objective from the base gap runs, absolute cooperation levels should be compared within this family, not across the two.
+**Which channel properties are sufficient?** \label{sec-clean-msgsource} A separate matched family (Table \ref{tbl-clean-msgsource}) isolates message source as the sole design variable. All communication-enabled arms train under a common zero-auxiliary objective, so the design difference is message source, not communication-specific shaping. Because this family uses a different objective from the base gap, absolute cooperation levels should be compared within it, not across the two.
 
 ```{python}
 #| echo: false
@@ -1986,7 +1988,7 @@ print(
 )
 ```
 
-In plain terms: when each agent broadcasts its own independent random bit at every timestep---carrying no learned meaning whatsoever---cooperation is nearly identical to what learned communication achieves. What matters is not the content of messages, but that each sender slot provides its own varying signal. A single shared random bit, which gives all agents the same cue, is not enough; four independent bits, which let agents distinguish who sent what, are.
+In plain terms: when each agent broadcasts its own independent random bit at every timestep---carrying no learned meaning---cooperation is nearly identical to what learned communication achieves. In this binary-vocabulary setting, where four independent bits already produce 16 distinguishable patterns, per-sender variation captures most of the training-time benefit. A single shared random bit, which gives all agents the same cue, is not enough; four independent bits, which let agents distinguish who sent what, are.
 
 ## Communication's advantage requires temporal context {#sec-factorial}
 
@@ -2010,7 +2012,7 @@ Communication's training-time value is therefore not intrinsic to the channel; i
 
 ## The trained policy depends on variable input, not learned content {#sec-frozen-endpoint}
 
-The preceding experiments asked what matters during training. Here the question is different: once agents are fully trained, what aspects of the message channel do they actually rely on? To answer this, we freeze the learned 150k policy and substitute different message streams at evaluation time, measuring how cooperation changes. This separates endpoint dependence from training-time sufficiency. (Analogous 50k comparisons appear in Appendix \ref{app:frozen50k}.) Throughout, \texttt{natural} denotes the unperturbed learned stream. Table \ref{tbl-endpoint-interventions} defines the evaluation-time manipulations used in this section.
+The preceding experiments asked what matters during training. Here the question is different: once agents are fully trained, what aspects of the message channel do they actually rely on? To answer this, we take the trained 150k policy, fix all its weights so it can no longer learn, and feed it different message streams at evaluation time. If cooperation drops under a particular replacement, the trained policy was relying on whatever that replacement removed. This separates what the policy has come to depend on from what was needed during learning---a distinction that turns out to matter, since the two can give different answers. (Analogous 50k comparisons appear in Appendix \ref{app:frozen50k}.) Throughout, \texttt{natural} denotes the original learned message stream. Table \ref{tbl-endpoint-interventions} defines all the replacement streams used in this section.
 
 ```{python}
 #| echo: false
@@ -2020,6 +2022,7 @@ print(
         "tbl-endpoint-interventions",
         r"Frozen-policy message interventions used for endpoint dependence tests. Each manipulation replaces the learned message stream at evaluation time and targets a different hypothesis about what part of the channel the trained policy relies on.",
         render_endpoint_intervention_table(),
+        position="tbp",
     )
 )
 ```
@@ -2171,15 +2174,8 @@ print(
         "fig-endpoint-panels",
         r"Endpoint message-dependence results shown as a four-panel figure at the 150k checkpoint. Panels A--B: frozen-policy message interventions at $f=3.5$ (A) and $f=5.0$ (B), each reporting intervention minus natural-stream cooperation in percentage points. Points show paired means across 15 seeds, horizontal lines show bootstrap 95\% CIs, filled markers indicate sign-flip $p < 0.05$, and the blue diamond is the separately trained no-communication baseline. Panels C--D: single-slot sender probes at $f=3.5$ (C) and $f=5.0$ (D). Each heatmap cell shows the absolute cooperation-probability difference when forcing one sender's token to 1 versus 0 for a given receiver (mean $|\Delta P(C)|$ in pp over 15 seeds); boxed diagonals mark self-effects. Together, the panels show that the frozen policy depends on variable message input, but in a sender-specific and regime-dependent way.",
         endpoint_fig_path,
+        position="t",
     )
-)
-```
-
-```{python}
-#| echo: false
-#| output: asis
-print(
-    f"At 150k, the frozen policy remains strongly channel-dependent, but the form of that dependence differs by regime (Panels A--B of Figure \\ref{{fig-endpoint-panels}})."
 )
 ```
 
@@ -2191,59 +2187,31 @@ ss_p_35 = fmt_num(paired_p('sender_shuffle', '3.500'), 3)
 ss_pos_50, _ = paired_sign_counts('sender_shuffle', '5.000')
 ss_p_50 = fmt_num(paired_p('sender_shuffle', '5.000'), 2)
 print(
-    f"Endpoint dependence is regime-specific (Panels A--B of Figure \\ref{{fig-endpoint-panels}}; full paired statistics in Table \\ref{{tbl-paired-stats}}). At $f=3.5$, content-destroying variable replacements cost $4$--$6\\pp$ relative to the natural stream (e.g.\\ scrambling sender identities: {d_ss_35}, sign-flip $p={ss_p_35}$), so learned content retains a modest endpoint advantage. At $f=5.0$, those same replacements are statistically indistinguishable from natural ({ss_pos_50}/15 seeds favour natural for \\texttt{{sender\\_shuffle}}, $p={ss_p_50}$), and the clearest damage comes instead from removing or blanking the channel entirely. The endpoint policy at $f=5.0$ depends on having \\emph{{some}} variable input, but not on the learned stream per se."
+    f"The trained policy remains strongly dependent on its message input, but what it depends on differs between regimes (Panels A--B of Figure \\ref{{fig-endpoint-panels}}; full paired statistics in Table \\ref{{tbl-paired-stats}}). At $f=3.5$, replacing the learned stream with scrambled or randomized messages costs $4$--$6\\pp$ in cooperation (e.g.\\ shuffling sender identities: {d_ss_35}, sign-flip $p={ss_p_35}$). The learned message content still carries a modest advantage here. At $f=5.0$, the picture changes: those same replacements are statistically indistinguishable from the original stream ({ss_pos_50}/15 seeds favour \\texttt{{natural}} for \\texttt{{sender\\_shuffle}}, $p={ss_p_50}$). What hurts cooperation at $f=5.0$ is not scrambling the content but removing or blanking the channel entirely. The policy needs some varying input in the message slots, but it does not need the specific messages that were learned during training."
 )
 ```
-
-\texttt{zeros} is not another constant-token control: it blanks the message input, whereas \texttt{fixed0} and \texttt{fixed1} supply valid constant tokens. The asymmetry among \texttt{zeros}, \texttt{fixed0}, and \texttt{fixed1} is therefore an endpoint property of the learned 150k policy, not a training-time sufficiency result. Section \ref{sec-clean-msgsource} shows that when training starts from scratch, both constant channels are harmful.
 
 ## Each sender's message matters, but the effects wash out in aggregate {#sec-sender-probes}
 
-The interventions above replace all messages at once. To understand whether individual senders matter, we run a finer-grained test: force one sender's token to 0 or 1, hold everything else fixed, and measure how receivers respond. This isolates the causal effect of a single sender's message on a frozen policy.
-
-```{python}
-#| echo: false
-#| output: asis
-print(
-    f"Panels C--D of Figure \\ref{{fig-endpoint-panels}} show that single-sender interventions are negligible at low multipliers but large at the two focal regimes: forcing one sender's token changes receiver cooperation by {pp_math(sender_overall('overall_all', '3.5')['mean_abs_delta_p_cooperate'])} at $f=3.5$ and {pp_math(sender_overall('overall_all', '5.0')['mean_abs_delta_p_cooperate'])} at $f=5.0$ on average (Table \\ref{{tbl-sender-causal}})."
-)
-```
-
-```{python}
-#| echo: false
-#| output: asis
-print(
-    f"The signed direction of these effects varies across sender--receiver pairs (Panels C--D of Figure \\ref{{fig-endpoint-panels}}), with opposite-polarity senders within the same seed. The main point is pair-specificity: sender influence is not a uniform population-wide code."
-)
-```
-
-Unperturbed rollouts tell the same story. In natural traces, receivers respond to *which* sender sent each token, not just the total number of ones received.
+The interventions above replace all messages at once. To test whether individual senders matter, we run a finer-grained test: force one sender's token to 0 or 1, hold everything else fixed, and measure how receivers respond.
 
 ```{python}
 #| echo: false
 #| output: asis
 tt_at = tex_tt("any_token")
-print(
-    f"Message patterns that contain the same number of ones but differ in which sender sent them produce very different receiver behavior: the median cooperation gap between the best and worst same-count pattern reaches {ppnum_math(pattern_max_gap_pp('3.5'))} at $f=3.5$ and {ppnum_math(pattern_max_gap_pp('5.0'))} at $f=5.0$. A receiver seeing $[1,0,1]$ from three senders can behave completely differently from one seeing $[0,1,1]$, even though both messages contain two ones. By contrast, simply knowing whether anyone sent a $1$ at all (the {tt_at} split) moves cooperation by only {pp_math(any_token_delta('3.5'))} at $f=3.5$ and {pp_math(any_token_delta('5.0'))} at $f=5.0$."
-)
-```
-
-```{python}
-#| echo: false
-#| output: asis
 agg_eff = pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semantics_value('150000', 'aggregate_signed_sem'))
 sender_eff = abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))
 mixed_regime_seeds = int(round(float(semantics_value('150000', 'mixed_regime_seed_count'))))
 print(
-    f"These large local effects coexist with weak pooled token effects because sender polarities differ within a seed. At 150k, the pooled signed any-token effect is only {agg_eff}, while per-sender effects remain {sender_eff}; mixed-polarity sender conventions appear in {mixed_regime_seeds}/15 seeds. Aggregate token summaries therefore wash out pair-specific dependence rather than showing that the channel is unimportant (Appendix \\ref{{app:alignment}})."
+    f"These single-sender effects are negligible at low multipliers but large at the two focal regimes: forcing one sender's token changes receiver cooperation by {pp_math(sender_overall('overall_all', '3.5')['mean_abs_delta_p_cooperate'])} at $f=3.5$ and {pp_math(sender_overall('overall_all', '5.0')['mean_abs_delta_p_cooperate'])} at $f=5.0$ on average (Panels C--D of Figure \\ref{{fig-endpoint-panels}}; full results in Table \\ref{{tbl-sender-causal}}). Critically, the direction of each sender's influence varies: within the same trained group, one sender's token 1 might push a receiver toward cooperation while another's pushes toward defection. Sender influence is pair-specific, not a uniform code shared across the group.\n\n"
+    f"Standard evaluation runs---where no messages are forced or replaced---confirm the same structure. Receivers respond to \\emph{{who}} sent each token, not just how many ones were received. Two message patterns that both contain two ones, say $[1,0,1]$ and $[0,1,1]$, differ only in which sender said what, yet the median cooperation gap between the best and worst such pattern reaches {ppnum_math(pattern_max_gap_pp('3.5'))} at $f=3.5$ and {ppnum_math(pattern_max_gap_pp('5.0'))} at $f=5.0$. By contrast, simply knowing whether \\emph{{anyone}} sent a 1 (the {tt_at} split) moves cooperation by only {pp_math(any_token_delta('3.5'))} and {pp_math(any_token_delta('5.0'))}.\n\n"
+    f"This pair-specificity has a direct consequence for evaluation. Because different senders within the same group assign opposite meanings to the same token, their effects cancel when pooled: per-sender effects remain large ({sender_eff}), but the pooled any-token effect is only {agg_eff}, with mixed sender polarities in {mixed_regime_seeds}/15 seeds (Appendix \\ref{{app:alignment}}). Standard aggregate statistics---pooled token effects, mutual information, topographic similarity---can therefore read as near-zero even when the underlying sender--receiver relationships are strong. Evaluating communication at the aggregate level misses the structure that actually drives behavior."
 )
 ```
 
-This pattern has a direct consequence for evaluation. Because different senders within the same population assign opposite meanings to the same token, their effects cancel when pooled. Standard summary statistics---pooled token effects, mutual information, topographic similarity---can therefore read as near-zero even when the underlying sender--receiver relationships are strong and behaviorally consequential. Evaluating communication at the aggregate level misses the structure that actually matters.
-
 ## Learned conventions do not transfer across populations {#sec-lowdim}
 
-The sender probes show that message conventions are pair-specific within a trained group. But would these conventions work with unfamiliar partners? To test this, we take a trained receiver from one seed and feed it messages produced by senders from a different, independently trained seed. We try the foreign stream both as-is and with all tokens flipped ($0 \leftrightarrow 1$), keeping whichever version works better for each receiver--donor pair---a generous upper bound, since it is chosen after seeing the outcome.
+The sender probes show that message conventions are pair-specific within a trained group. But would these conventions work with unfamiliar partners under direct zero-shot substitution? To test this, we take a trained receiver from one seed and feed it messages produced by senders from a different, independently trained seed. We try the foreign stream both as-is and with all tokens flipped ($0 \leftrightarrow 1$), keeping whichever version works better for each receiver--donor pair---a generous upper bound, since it is chosen after seeing the outcome.
 
 ```{python}
 #| echo: false
@@ -2258,13 +2226,13 @@ print(
 )
 ```
 
-A complementary surrogate analysis confirms this: when we train simple predictive models on some seeds and test them on held-out seeds, adding richer sender-aware message features makes cross-seed prediction *worse*, not better (Appendix~\ref{app:lowdim-spec}). Sender-specific structure helps within the population that produced it, but it does not generalize. For evaluation, this means that a protocol's effectiveness within one trained group is not evidence that it would work with new partners---portability requires its own test.
+A complementary surrogate analysis confirms this: when we train simple predictive models on some seeds and test them on held-out seeds, adding richer sender-aware message features makes cross-seed prediction *worse*, not better (Appendix~\ref{app:lowdim-spec}). Sender-specific structure helps within the population that produced it, but it does not generalize under the transfer methods tested here. Richer methods---short adaptation or mixed-population training---remain untested and could yield different conclusions. For evaluation, this means that a protocol's effectiveness within one trained group is not evidence of zero-shot portability to new partners.
 
 # Discussion {#sec-discussion}
 
 The standard account of emergent communication assumes that agents learn a shared code whose semantic content drives coordination. Our results show that this account is incomplete---and that the conclusion one draws depends critically on how one evaluates.
 
-**Evaluating effectiveness is not evaluating mechanism.** A comm-vs-no-comm comparison establishes that the channel helps, but cannot say why, since communication also changes inputs, losses, and the optimization path. To attribute gains to learned content, one needs message-source controls that hold everything else fixed. In our setting, independent random messages largely match learned communication, showing that much of the benefit comes from structured input variation rather than portable semantics.
+**Evaluating effectiveness is not evaluating mechanism.** A comm-vs-no-comm comparison establishes that the channel helps, but cannot say why, since communication also changes inputs, losses, and the optimization path. To attribute gains to learned content, one needs message-source controls that hold everything else fixed. In our binary-vocabulary setting, independent random messages largely match learned communication during training, showing that structured input variation---not learned content---is the dominant factor.
 
 **Evaluating communication in context.** The communication $\times$ history factorial shows that variable input alone is not sufficient: the channel's benefit disappears without temporal observation features. Messages and temporal state are complements, not substitutes---agents without a temporal anchor treat message variation as noise rather than leaning harder on it. A pure portable-code account would predict weaker dependence on temporal features than we observe, since a meaningful regime signal should be interpretable without knowing recent group behavior.
 
@@ -2275,11 +2243,11 @@ agg_eff = pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semanti
 sender_eff = abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))
 mixed_regime_seeds = int(round(float(semantics_value('150000', 'mixed_regime_seed_count'))))
 print(
-    f"\\textbf{{Separating training-time value from endpoint dependence.}} A message source may support learning without being privileged in the final policy, and vice versa. In our data, variable input is essential for learning but dispensable in the endpoint policy at $f=5.0$. Without this separation, conclusions about what communication ``does'' can be misleading. Aggregate metrics compound the problem: per-sender effects are large ({sender_eff}), yet the pooled any-token effect is only {agg_eff} because senders adopt opposite token polarities ({mixed_regime_seeds}/15 seeds at 150k). Standard summary statistics can all read as near-zero while the underlying sender--receiver structure remains strong."
+    f"\\textbf{{Separating training-time value from endpoint dependence.}} A message source may support learning without being privileged in the final policy, and vice versa. In our data, variable input is essential for learning but dispensable in the endpoint policy at $f=5.0$. Without this separation, conclusions about what communication ``does'' can be misleading---not because the analyses contradict each other, but because they answer different questions and the answers need not agree. Aggregate metrics compound the problem: per-sender effects are large ({sender_eff}), yet the pooled any-token effect is only {agg_eff} because senders adopt opposite token polarities ({mixed_regime_seeds}/15 seeds at 150k). Standard summary statistics can all read as near-zero while the underlying sender--receiver structure remains strong."
 )
 ```
 
-**Evaluating portability.** Cross-seed transfer confirms the same picture: learned conventions do not generalize to new partners, simple polarity-alignment rules cannot recover the post hoc transfer upper bound, and richer sender-aware surrogate features hurt rather than help held-out prediction (Table \ref{tbl-lowdim-surrogate}). The channel supports functionally equivalent but structurally incompatible sender--receiver mappings that do not transfer [@hu2020other; @bullard2021quasi].
+**Evaluating portability.** Cross-seed transfer confirms the same picture: under direct zero-shot substitution, learned conventions do not generalize to new partners, simple polarity-alignment rules cannot recover the post hoc transfer upper bound, and richer sender-aware surrogate features hurt rather than help held-out prediction (Table \ref{tbl-lowdim-surrogate}). The channel supports functionally equivalent but structurally incompatible sender--receiver mappings that do not transfer under the methods tested here [@hu2020other; @bullard2021quasi].
 
 ```{python}
 #| echo: false
@@ -2289,13 +2257,13 @@ print(
 )
 ```
 
-**Evaluation recommendations.** These results suggest that evaluating emergent communication requires at minimum: (i) message-source controls to test whether learned content is necessary, (ii) separation of training-time and endpoint analyses, since they can give opposite conclusions about the same channel, (iii) interaction tests with representational features such as temporal state, and (iv) cross-population transfer tests to assess portability. The gap between learned and random messages bounds the content contribution; the gap between same-seed and cross-seed performance bounds convention portability.
+**Evaluation recommendations.** These results suggest that evaluating emergent communication requires at minimum: (i) message-source controls to test whether learned content is necessary, (ii) separation of training-time and endpoint analyses, since they answer different questions and can give conflicting conclusions about the same channel, (iii) interaction tests with representational features such as temporal state, and (iv) cross-population transfer tests to assess portability. The gap between learned and random messages bounds the content contribution; the gap between same-seed and cross-seed performance bounds convention portability.
 
 ## Limitations
 
 The central result---that uniform random messages nearly match learned communication---is established in a binary-vocabulary setting where $2^4 = 16$ slot-indexed patterns may already be rich enough to substitute for learned content. Under larger vocabularies, uniform sampling would cover only a small fraction of the message space, and learned protocols could exploit structure that random input cannot reproduce. Whether the learned--uniform equivalence breaks under richer vocabularies is the paper's most direct open prediction. The source-mode family does not isolate which property of slotwise variation drives the effect, and uses full-history agents only, so whether the equivalence holds under reduced history is untested.
 
-The factorial removes all temporal inputs together, so which specific features mediate the interaction is unknown; the result also applies only to feed-forward policies. Cross-seed transfer is tested only with a fixed receiver; full mixed-population cross-play remains untested. Finally, this is a single-game, four-agent case study; the evaluation recommendations above remain to be validated in other settings.
+The factorial removes all temporal inputs together, so which specific features mediate the interaction is unknown; the result also applies only to feed-forward policies. Cross-seed transfer is tested only under direct zero-shot substitution with a fixed receiver policy; richer transfer methods remain untested and could yield different conclusions about portability. Finally, this is a single-game, four-agent case study; the evaluation recommendations above remain to be validated in other settings.
 
 ```{=latex}
 \clearpage
