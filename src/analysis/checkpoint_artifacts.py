@@ -30,6 +30,17 @@ class CheckpointArtifact:
 
 
 def _load_checkpoint_config(path: str) -> dict:
+    sidecar_path = Path(path).with_suffix(".run.json")
+    if sidecar_path.exists():
+        try:
+            payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except Exception:
+            payload = None
+        if isinstance(payload, dict):
+            config = payload.get("config", {})
+            if isinstance(config, dict) and len(config) > 0:
+                return config
+
     try:
         import torch
     except Exception:

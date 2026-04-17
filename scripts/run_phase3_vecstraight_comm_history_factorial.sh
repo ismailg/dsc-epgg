@@ -10,6 +10,8 @@ cd "${REPO_ROOT}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 RUN_DATE="${RUN_DATE:-$(date +%Y%m%d)}"
 TRAIN_MAX_WORKERS="${TRAIN_MAX_WORKERS:-auto}"
+SIGN_LAMBDA="${SIGN_LAMBDA:-0.1}"
+LIST_LAMBDA="${LIST_LAMBDA:-0.1}"
 SEEDS_STR="${SEEDS_STR:-101 202 303 404 505 606 707 808 909 1111 1212 1313 1414 1515 1616}"
 read -r -a SEEDS <<< "${SEEDS_STR}"
 N_EPISODES="${N_EPISODES:-150000}"
@@ -102,7 +104,7 @@ run_cell() {
       ;;
   esac
 
-  local out_root="${REPO_ROOT}/outputs/train/phase3_vecstraight_comm_history_factorial_${cell}_15seeds_${RUN_KIND}_${RUN_DATE}"
+  local out_root="${OUT_ROOT:-${REPO_ROOT}/outputs/train/phase3_vecstraight_comm_history_factorial_${cell}_15seeds_${RUN_KIND}_${RUN_DATE}}"
   local train_out="${out_root}/train"
   local metrics_root="${train_out}/metrics"
   local logs_root="${train_out}/logs"
@@ -130,6 +132,8 @@ run_cell() {
     printf 'log_interval=%s\n' "${LOG_INTERVAL}"
     printf 'regime_log_interval=%s\n' "${REGIME_LOG_INTERVAL}"
     printf 'checkpoint_interval=%s\n' "${CHECKPOINT_INTERVAL}"
+    printf 'sign_lambda=%s\n' "${SIGN_LAMBDA}"
+    printf 'list_lambda=%s\n' "${LIST_LAMBDA}"
     printf 'seeds=%s\n' "${SEEDS[*]}"
   } > "${manifest_path}"
 
@@ -197,8 +201,8 @@ run_cell() {
       --max_grad_norm 0.5
       --ppo_epochs 4
       --mini_batch_size 32
-      --sign_lambda 0.1
-      --list_lambda 0.1
+      --sign_lambda "${SIGN_LAMBDA}"
+      --list_lambda "${LIST_LAMBDA}"
       --history_mode "${history_mode}"
       --seed "${seed}"
       --log_interval "${LOG_INTERVAL}"

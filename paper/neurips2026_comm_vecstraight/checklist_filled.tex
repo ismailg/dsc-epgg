@@ -96,7 +96,7 @@
 \item {\bf Experiment statistical significance}
     \item[] Question: Does the paper report error bars suitably and correctly defined or other appropriate information about the statistical significance of the experiments?
     \item[] Answer: \answerYes{}
-    \item[] Justification: Main figures and tables report SEM over 15 training seeds, and paired continuation and loss-switch controls report sign-flip p-values where those contrasts matter. Captions and text specify what the uncertainty summaries represent.
+    \item[] Justification: Main figures and tables report SEM over 15 training seeds, and paired intervention or transfer contrasts report sign-flip p-values where those contrasts matter. Captions and text specify what the uncertainty summaries represent.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.
@@ -113,7 +113,7 @@
 \item {\bf Experiments compute resources}
     \item[] Question: For each experiment, does the paper provide sufficient information on the computer resources (type of compute workers, memory, time of execution) needed to reproduce the experiments?
     \item[] Answer: \answerYes{}
-    \item[] Justification: Appendix~\ref{app:repro} reports the CPU-only execution setting, batch parallelism, approximate wall-clock for the preserved main 15-seed training suites, and aggregate seed-worker-hour totals derived from the batch progress logs. Peak per-job memory was not logged separately, so the disclosure is approximate rather than exhaustive, but it provides enough information to reproduce the reported runs.
+    \item[] Justification: Appendix~\ref{app:repro} reports the CPU-only execution setting, batch parallelism, approximate wall-clock for the main 15-seed training runs, and aggregate seed-worker-hour totals derived from batch logs. Peak per-job memory was not logged separately, so the disclosure is approximate rather than exhaustive, but it provides enough information to reproduce the reported runs.
     \item[] Guidelines:
     \begin{itemize}
         \item The answer \answerNA{} means that the paper does not include experiments.

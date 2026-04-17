@@ -83,6 +83,12 @@ Implement the Week 1–2 scope for DSC-EPGG on top of `marl-emecom` with strict 
 - Use [`DATA_MAP.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized/DATA_MAP.md) as the artifact registry for canonical local/remote paths and fetched mirrors.
 - Under the new straight vectorized design, the late communication gap is positive at both `f=3.5` and `f=5.0` by `150k` (`+16.4 pp` and `+18.8 pp` in the current recheck), so old manuscript-facing phase-3 claims are not portable across training designs.
 
+## Zero-Aux Paper Transition Guardrail
+- In this dedicated zero-aux worktree, authority comes from [`ZERO_AUX_PAPER_TRANSITION_PLAN.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized-zeroaux-plan/ZERO_AUX_PAPER_TRANSITION_PLAN.md) and [`ZERO_AUX_OLD_REPO_HANDOFF.md`](/Users/mbp17/POSTDOC/NPS26/dsc-epgg-vectorized-zeroaux-plan/ZERO_AUX_OLD_REPO_HANDOFF.md), not from the default manuscript-polish path in `PHASE3_VECSTRAIGHT_NEXT_STEPS.md`.
+- For Section 4.1 / the base communication gap, use zero-aux `clean_msgsource_learned` as the canonical full-history `comm` arm and `comm_history_factorial_without_comm_full_history` as the canonical full-history `no-comm` baseline.
+- Do not use `outputs/eval/phase3_vectorized_comm_gap_15seeds_local_20260325/exact_f_gap_table.csv` for the zero-aux paper path. The intended paper-facing replacement in this worktree is `outputs/eval/phase3_vecstraight_zeroaux_base_gap_local_20260415/report/exact_f_gap_table.csv`.
+- Do not substitute the clean-msgsource family's internal no-comm row for the Section 4.1 baseline; the clean-msgsource family and the base-gap family answer different questions.
+
 ## Phase-3 Continuation Parity Contract
 - Same-checkpoint continuation runs in `phase3_vecstraight` must preserve the base training regime unless the scientific question explicitly changes it.
 - For the current vecstraight manuscript family, the continuation training contract is:

@@ -83,6 +83,29 @@ def test_manifest_checkpoint_path_uses_absolute_episode_under_continuation(tmp_p
         resolve_manifest_checkpoint_path(manifest, "cond1", 111, 50000)
 
 
+def test_manifest_checkpoint_path_prefers_run_json_sidecar(tmp_path: Path):
+    final_ckpt = tmp_path / "cond1_seed111.pt"
+    mid_ckpt = tmp_path / "cond1_seed111_ep100000.pt"
+    final_ckpt.write_text("not-a-torch-checkpoint\n", encoding="utf-8")
+    mid_ckpt.write_text("not-a-torch-checkpoint\n", encoding="utf-8")
+    (tmp_path / "cond1_seed111.run.json").write_text(
+        json.dumps({"config": {"episode_offset": 50000, "n_episodes": 100000}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "cond1_seed111_ep100000.run.json").write_text(
+        json.dumps({"config": {"episode_offset": 50000, "n_episodes": 100000}}),
+        encoding="utf-8",
+    )
+    manifest = _write_manifest(tmp_path / "cond1.txt", [mid_ckpt, final_ckpt])
+
+    assert resolve_manifest_checkpoint_path(manifest, "cond1", 111, 100000) == str(mid_ckpt)
+    assert resolve_manifest_checkpoint_path(manifest, "cond1", 111, 150000) == str(final_ckpt)
+    assert infer_manifest_absolute_milestones(manifest, condition="cond1", seeds=[111]) == [
+        100000,
+        150000,
+    ]
+
+
 def test_validate_checkpoint_suite_outputs_rejects_header_only_raw_csv(tmp_path: Path):
     suite_dir = tmp_path / "suite"
     raw_dir = suite_dir / "raw"
@@ -267,6 +290,64 @@ def test_public_marginal_eval_intervention_uses_shared_average_sender_marginal(m
     assert not force_zero
     assert out == {"agent_0": 1, "agent_1": 1, "agent_2": 1, "agent_3": 1}
     assert np.allclose(captured["p"], np.asarray([0.65, 0.35], dtype=np.float64))
+
+
+def test_zeros_eval_intervention_blanks_message_slice_not_token_zero():
+    wrapper = ObservationWrapper(
+        n_agents=4,
+        comm_enabled=True,
+        n_senders=4,
+        sender_ids=["agent_0", "agent_1", "agent_2", "agent_3"],
+        vocab_size=2,
+    )
+    agent_ids = ["agent_0", "agent_1", "agent_2", "agent_3"]
+    wrapper.reset(agent_ids=agent_ids)
+    raw_obs = {agent_id: np.asarray([3.5, 4.0], dtype=np.float32) for agent_id in agent_ids}
+    f_hat = {agent_id: 3.5 for agent_id in agent_ids}
+
+    fixed0_messages, fixed0_force_zero = evaluate_regime_conditional._apply_message_intervention(
+        intervention="fixed0",
+        delivered={"agent_0": 1, "agent_1": 1, "agent_2": 0, "agent_3": 1},
+        wrapper=wrapper,
+        sender_ids=agent_ids,
+        vocab_size=2,
+    )
+    zeros_messages, zeros_force_zero = evaluate_regime_conditional._apply_message_intervention(
+        intervention="zeros",
+        delivered={"agent_0": 1, "agent_1": 1, "agent_2": 0, "agent_3": 1},
+        wrapper=wrapper,
+        sender_ids=agent_ids,
+        vocab_size=2,
+    )
+
+    assert fixed0_messages == {agent_id: 0 for agent_id in agent_ids}
+    assert not fixed0_force_zero
+    assert zeros_messages == {"agent_0": 1, "agent_1": 1, "agent_2": 0, "agent_3": 1}
+    assert zeros_force_zero
+
+    fixed0_obs = evaluate_regime_conditional._build_aug_obs(
+        wrapper=wrapper,
+        raw_obs=raw_obs,
+        agent_ids=agent_ids,
+        current_messages=fixed0_messages,
+        observed_f_hat_by_agent=f_hat,
+        history_intervention="none",
+    )
+    zeros_obs = evaluate_regime_conditional._build_aug_obs(
+        wrapper=wrapper,
+        raw_obs=raw_obs,
+        agent_ids=agent_ids,
+        current_messages=zeros_messages,
+        observed_f_hat_by_agent=f_hat,
+        history_intervention="none",
+    )
+    msg_start = int(wrapper.message_start_idx)
+    for agent_id in agent_ids:
+        zeros_obs[agent_id][msg_start:] = 0.0
+
+    assert np.allclose(fixed0_obs["agent_0"][msg_start:], np.asarray([1.0, 0.0] * 4))
+    assert np.allclose(zeros_obs["agent_0"][msg_start:], np.zeros(8, dtype=np.float32))
+    assert not np.allclose(fixed0_obs["agent_0"][msg_start:], zeros_obs["agent_0"][msg_start:])
 
 
 def test_sender_remap_requires_full_bijection():
@@ -885,6 +966,8 @@ def test_comm_history_factorial_script_preserves_vecstraight_base_contract():
     text = script_path.read_text(encoding="utf-8")
 
     assert 'TRAIN_MAX_WORKERS="${TRAIN_MAX_WORKERS:-auto}"' in text
+    assert 'SIGN_LAMBDA="${SIGN_LAMBDA:-0.1}"' in text
+    assert 'LIST_LAMBDA="${LIST_LAMBDA:-0.1}"' in text
     assert "detect_default_train_workers()" in text
     assert 'if [[ "${TRAIN_MAX_WORKERS}" == "auto" ]]; then' in text
     assert 'suggested=$(( nproc_val / 2 ))' in text
@@ -898,6 +981,9 @@ def test_comm_history_factorial_script_preserves_vecstraight_base_contract():
     assert "--msg_entropy_coeff 0.01" in text
     assert "--msg_entropy_coeff_final 0.0" in text
     assert "--history_mode \"${history_mode}\"" in text
+    assert '--sign_lambda "${SIGN_LAMBDA}"' in text
+    assert '--list_lambda "${LIST_LAMBDA}"' in text
+    assert 'local out_root="${OUT_ROOT:-${REPO_ROOT}/outputs/train/phase3_vecstraight_comm_history_factorial_${cell}_15seeds_${RUN_KIND}_${RUN_DATE}}"' in text
     assert "must be divisible by 8 to preserve the base vectorized count_env_episodes contract" in text
     assert 'if (( ${#active_pids[@]} == 0 )); then' in text
     assert 'local -a kept=()' in text
@@ -921,6 +1007,32 @@ def test_comm_history_factorial_parallel_script_splits_host_budget_across_all_ce
     assert 'export TRAIN_MAX_WORKERS="${cell_workers}"' in text
     assert './scripts/run_phase3_vecstraight_comm_history_factorial.sh "${cell}" "${RUN_KIND}"' in text
     assert '[parallel factorial done] status=ok' in text
+
+
+def test_zeroaux_reduced_history_wrapper_only_changes_aux_lambdas_and_output_root():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_comm_history_zeroaux_reduced.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert 'export SIGN_LAMBDA="${SIGN_LAMBDA:-0.0}"' in text
+    assert 'export LIST_LAMBDA="${LIST_LAMBDA:-0.0}"' in text
+    assert 'if [[ -n "${IWR_RUN_DIR:-}" ]]; then' in text
+    assert 'OUTPUT_BASE="${IWR_RUN_DIR}/outputs/train"' in text
+    assert 'OUTPUT_BASE="${REPO_ROOT}/outputs/train"' in text
+    assert 'phase3_vecstraight_comm_history_factorial_with_comm_reduced_history_zeroaux_15seeds_${RUN_KIND}_${RUN_DATE}' in text
+    assert 'exec ./scripts/run_phase3_vecstraight_comm_history_factorial.sh with_comm_reduced_history "${RUN_KIND}"' in text
+
+
+def test_iwr_zeroaux_reduced_history_job_uses_staged_venv_and_wrapper():
+    script_path = REPO_ROOT / "scripts" / "iwr_jobs" / "phase3_vecstraight_zeroaux_comm_reduced_iwr.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert 'export RUN_KIND="${RUN_KIND:-iwr}"' in text
+    assert 'export TRAIN_MAX_WORKERS="${TRAIN_MAX_WORKERS:-15}"' in text
+    assert 'export PYTHON_BIN="${PYTHON_BIN:-${IWR_PROJECT_DIR:-$(pwd)}/.venv/bin/python}"' in text
+    assert 'missing python interpreter: ${PYTHON_BIN}' in text
+    assert './scripts/run_phase3_vecstraight_comm_history_zeroaux_reduced.sh "${RUN_KIND}"' in text
 
 
 def test_phase3_seed_expansion_build_job_respects_explicit_comm_lambdas(tmp_path):
@@ -1057,6 +1169,153 @@ def test_vecstraight_setup_script_is_bash_portable():
     assert text.startswith("#!/usr/bin/env bash")
     assert "/bin/zsh -lc" not in text
     assert '"${PYTHON_BIN}" -m src.analysis.prepare_phase3_vecstraight_manifests --run_date "${RUN_DATE}"' in text
+
+
+def test_zeroaux_manifest_prepare_script_invokes_python_entrypoint():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_prepare_zeroaux_manifests.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert 'RUN_DATE="${RUN_DATE:-$(date +%Y%m%d)}"' in text
+    assert '"${PYTHON_BIN}" -m src.analysis.prepare_phase3_zeroaux_manifests --run_date "${RUN_DATE}"' in text
+
+
+def test_zeroaux_manifest_builder_tracks_sizes_and_sampled_run_json_contract():
+    script_path = REPO_ROOT / "src" / "analysis" / "prepare_phase3_zeroaux_manifests.py"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert "phase3_vecstraight_clean_msgsource_learned_15seeds_hetzner_20260410" in text
+    assert "phase3_vecstraight_comm_history_factorial_without_comm_full_history_15seeds_hetzner_20260330par24" in text
+    assert '"size_bytes": path.stat().st_size if path.exists() else None' in text
+    assert '"sample_run_json": {' in text
+    assert '"sign_lambda": config.get("sign_lambda")' in text
+    assert '"list_lambda": config.get("list_lambda")' in text
+    assert '"comm_enabled": config.get("comm_enabled")' in text
+    assert "agent.can_send" in text
+    assert "functionally identical to a zero-aux no-comm training path" in text
+
+
+def test_frozen_suite_expanded_runner_supports_manifest_and_label_overrides():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_frozen_suite_expanded.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert 'COMM_MANIFEST="${COMM_MANIFEST:-${NEXT_ROOT}/manifests/cond1_all_15seeds.txt}"' in text
+    assert 'BASELINE_MANIFEST="${BASELINE_MANIFEST:-${NEXT_ROOT}/manifests/cond2_all_15seeds.txt}"' in text
+    assert 'OUT_LABEL_PREFIX="${OUT_LABEL_PREFIX:-phase3_vecstraight}"' in text
+    assert 'RUN_KIND_LABEL="${RUN_KIND_LABEL:-${RUN_KIND}}"' in text
+    assert 'OUT_ROOT="${REPO_ROOT}/outputs/eval/${OUT_LABEL_PREFIX}_${label}_15seeds_${RUN_KIND_LABEL}_${RUN_DATE}"' in text
+    assert '--eval_seed "${EVAL_SEED}"' in text
+
+
+def test_sender_causal_runner_supports_manifest_and_label_overrides():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_sender_causal.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert 'COMM_MANIFEST="${COMM_MANIFEST:-${NEXT_ROOT}/manifests/cond1_all_15seeds.txt}"' in text
+    assert 'OUT_LABEL_PREFIX="${OUT_LABEL_PREFIX:-phase3_vecstraight}"' in text
+    assert 'RUN_KIND_LABEL="${RUN_KIND_LABEL:-${RUN_KIND}}"' in text
+    assert 'OUT_ROOT="${REPO_ROOT}/outputs/eval/${OUT_LABEL_PREFIX}_sender_causal_150k_15seeds_${RUN_KIND_LABEL}_${RUN_DATE}"' in text
+    assert '--eval_seed "${EVAL_SEED}"' in text
+
+
+def test_noise_sweep_runner_supports_manifest_and_label_overrides():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_noise_sweep_eval.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert 'COMM_MANIFEST="${COMM_MANIFEST:-${NEXT_ROOT}/manifests/cond1_all_15seeds.txt}"' in text
+    assert 'BASELINE_MANIFEST="${BASELINE_MANIFEST:-${NEXT_ROOT}/manifests/cond2_all_15seeds.txt}"' in text
+    assert 'OUT_LABEL_PREFIX="${OUT_LABEL_PREFIX:-phase3_vecstraight}"' in text
+    assert 'RUN_KIND_LABEL="${RUN_KIND_LABEL:-${RUN_KIND}}"' in text
+    assert 'out_root="${REPO_ROOT}/outputs/eval/${OUT_LABEL_PREFIX}_noise_sweep_${obs_mode}_${sigma_label}_${MILESTONE}_15seeds_${RUN_KIND_LABEL}_${RUN_DATE}"' in text
+    assert '--eval_seed "${EVAL_SEED}" \\' in text
+
+
+def test_zeroaux_endpoint_bundle_runs_frozen_sender_causal_and_lowdim():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_zeroaux_endpoint_bundle.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert 'COMM_MANIFEST="${COMM_MANIFEST:-${MANIFEST_ROOT}/manifests/cond1_zeroaux_clean_msgsource_learned_full_history_all_15seeds_25k_50k_100k_150k.txt}"' in text
+    assert 'BASELINE_MANIFEST="${BASELINE_MANIFEST:-${MANIFEST_ROOT}/manifests/cond2_zeroaux_nocomm_full_history_all_15seeds_25k_50k_100k_150k.txt}"' in text
+    assert 'echo "missing zero-aux manifests" >&2' in text
+    assert 'RUN_DATE=${RUN_DATE} ./scripts/run_phase3_vecstraight_prepare_zeroaux_manifests.sh' in text
+    assert './scripts/run_phase3_vecstraight_frozen_suite_expanded.sh "${RUN_KIND}"' in text
+    assert './scripts/run_phase3_vecstraight_sender_causal.sh' in text
+    assert '"${PYTHON_BIN}" -m src.analysis.summarize_phase3_lowdim_mechanism \\' in text
+    assert '--trace_csv "${TRACE_CSV}" \\' in text
+    assert '--checkpoint_episode 150000 \\' in text
+    assert '--suite_kind comm' in text
+
+
+def test_zeroaux_cross_seed_transfer_wrapper_uses_manifest_reference_and_sender_semantics():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_zeroaux_cross_seed_transfer.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert 'COMM_MANIFEST="${COMM_MANIFEST:-${MANIFEST_ROOT}/manifests/cond1_zeroaux_clean_msgsource_learned_full_history_all_15seeds_25k_50k_100k_150k.txt}"' in text
+    assert 'REFERENCE_MAIN_CSV="${REFERENCE_MAIN_CSV:-${REPO_ROOT}/outputs/eval/phase3_vecstraight_zeroaux_frozen150k_expanded_15seeds_local_${RUN_DATE}/suite/checkpoint_suite_main.csv}"' in text
+    assert 'SENDER_SEMANTICS_CSV="${SENDER_SEMANTICS_CSV:-${REPO_ROOT}/outputs/eval/phase3_vecstraight_zeroaux_frozen150k_expanded_15seeds_local_${RUN_DATE}/suite/checkpoint_suite_sender_semantics.csv}"' in text
+    assert 'OUT_ROOT="${REPO_ROOT}/outputs/eval/${OUT_LABEL_PREFIX}_cross_seed_transfer_flip15seeds_matched_${RUN_KIND_LABEL}_${RUN_DATE}"' in text
+    assert "from src.analysis.checkpoint_artifacts import resolve_manifest_checkpoint_path" in text
+    assert 'SKIP_EXISTING="${SKIP_EXISTING:-1}"' in text
+    assert 'INPUT_CHECKPOINTS="${INPUTS_OUT}/checkpoints.txt"' in text
+    assert '--checkpoint_manifest "${INPUT_CHECKPOINTS}" \\' in text
+    assert '--episode "${EPISODE}" \\' in text
+    assert '--alignment_mode "${ALIGNMENT_MODE}" \\' in text
+    assert '--eval_seed "${EVAL_SEED}" \\' in text
+    assert '--reference_main_csv "${REFERENCE_MAIN_CSV}" \\' in text
+    assert '--sender_semantics_csv "${SENDER_SEMANTICS_CSV}" \\' in text
+
+
+def test_zeroaux_sender_encoding_wrapper_runs_natural_trace_and_summary():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_zeroaux_sender_encoding.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert 'COMM_MANIFEST="${COMM_MANIFEST:-${MANIFEST_ROOT}/manifests/cond1_zeroaux_clean_msgsource_learned_full_history_all_15seeds_25k_50k_100k_150k.txt}"' in text
+    assert 'OUT_ROOT="${REPO_ROOT}/outputs/eval/${OUT_LABEL_PREFIX}_frozen150k_natural_intended_15seeds_${RUN_KIND_LABEL}_${RUN_DATE}"' in text
+    assert '--baseline_condition "" \\' in text
+    assert '--milestones "${EPISODE}" \\' in text
+    assert '--interventions none \\' in text
+    assert '--eval_seed "${EVAL_SEED}" \\' in text
+    assert '"${PYTHON_BIN}" -m src.analysis.summarize_phase3_sender_encoding \\' in text
+    assert '--trace_csv "${SUITE_OUT}/checkpoint_suite_trace.csv" \\' in text
+    assert '--checkpoint_episode "${EPISODE}" \\' in text
+    assert '--eval_policy greedy \\' in text
+    assert '--suite_kind comm' in text
+
+
+def test_zeroaux_message_history_grid_uses_zeroaux_manifests_and_history_matrix():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_zeroaux_message_history_grid.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert 'COMM_MANIFEST="${COMM_MANIFEST:-${MANIFEST_ROOT}/manifests/cond1_zeroaux_clean_msgsource_learned_full_history_all_15seeds_25k_50k_100k_150k.txt}"' in text
+    assert 'BASELINE_MANIFEST="${BASELINE_MANIFEST:-${MANIFEST_ROOT}/manifests/cond2_zeroaux_nocomm_full_history_all_15seeds_25k_50k_100k_150k.txt}"' in text
+    assert "phase3_vecstraight_message_history_grid_150000_15seeds_local_20260327" not in text
+    assert 'OUT_ROOT="${OUT_ROOT:-${REPO_ROOT}/outputs/eval/${OUT_LABEL_PREFIX}_message_history_grid_${MILESTONE}_15seeds_${RUN_KIND_LABEL}_${RUN_DATE}}"' in text
+    assert "INTERVENTIONS=(none zeros marginal fixed0 fixed1 indep_random public_random sender_shuffle permute_slots)" in text
+    assert "HISTORYS=(none zero_temporal clamp_temporal_high clamp_temporal_low zero_last_coop zero_last_action zero_ewma clamp_ewma_high)" in text
+    assert '--history_interventions "${HISTORYS[@]}" \\' in text
+    assert '"${PYTHON_BIN}" -m src.analysis.summarize_phase3_history_audit \\' in text
+    assert "message_history_grid_meta.txt" in text
+
+
+def test_iwr_zeroaux_message_history_grid_job_uses_run_dir_inputs_and_project_script():
+    script_path = REPO_ROOT / "scripts" / "iwr_jobs" / "phase3_vecstraight_zeroaux_message_history_grid_iwr.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert ': "${IWR_RUN_DIR:?IWR_RUN_DIR must be set by the IWR launcher}"' in text
+    assert ': "${IWR_PROJECT_DIR:?IWR_PROJECT_DIR must be set by the IWR launcher}"' in text
+    assert 'INPUT_ROOT="${INPUT_ROOT:-${IWR_RUN_DIR}/inputs/zeroaux_message_history_grid}"' in text
+    assert 'COMM_CKPT_ROOT="${COMM_CKPT_ROOT:-${INPUT_ROOT}/cond1}"' in text
+    assert 'BASELINE_CKPT_ROOT="${BASELINE_CKPT_ROOT:-${INPUT_ROOT}/cond2}"' in text
+    assert "export COMM_CKPT_ROOT" in text
+    assert "export BASELINE_CKPT_ROOT" in text
+    assert 'OUT_ROOT="${OUT_ROOT:-${IWR_RUN_DIR}/outputs/eval/phase3_vecstraight_zeroaux_message_history_grid_150000_15seeds_iwr_${RUN_DATE}}"' in text
+    assert 'MAX_WORKERS="${MAX_WORKERS:-24}"' in text
+    assert './scripts/run_phase3_vecstraight_zeroaux_message_history_grid.sh iwr' in text
 
 
 def test_recommended_smoke_script_targets_subset_not_full_matrix():

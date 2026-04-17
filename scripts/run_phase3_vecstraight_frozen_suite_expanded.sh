@@ -9,8 +9,10 @@ cd "${REPO_ROOT}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 RUN_DATE="${RUN_DATE:-$(date +%Y%m%d)}"
 NEXT_ROOT="${REPO_ROOT}/outputs/eval/phase3_vecstraight_next_steps_${RUN_DATE}"
-COMM_MANIFEST="${NEXT_ROOT}/manifests/cond1_all_15seeds.txt"
-BASELINE_MANIFEST="${NEXT_ROOT}/manifests/cond2_all_15seeds.txt"
+COMM_MANIFEST="${COMM_MANIFEST:-${NEXT_ROOT}/manifests/cond1_all_15seeds.txt}"
+BASELINE_MANIFEST="${BASELINE_MANIFEST:-${NEXT_ROOT}/manifests/cond2_all_15seeds.txt}"
+OUT_LABEL_PREFIX="${OUT_LABEL_PREFIX:-phase3_vecstraight}"
+RUN_KIND_LABEL="${RUN_KIND_LABEL:-${RUN_KIND}}"
 MAX_WORKERS="${MAX_WORKERS:-4}"
 N_EVAL_EPISODES="${N_EVAL_EPISODES:-300}"
 EVAL_SEED="${EVAL_SEED:-9001}"
@@ -38,7 +40,7 @@ for idx in "${!MILESTONES[@]}"; do
     *) echo "unsupported milestone: ${milestone}" >&2; exit 2 ;;
   esac
 
-  OUT_ROOT="${REPO_ROOT}/outputs/eval/phase3_vecstraight_${label}_15seeds_${RUN_KIND}_${RUN_DATE}"
+  OUT_ROOT="${REPO_ROOT}/outputs/eval/${OUT_LABEL_PREFIX}_${label}_15seeds_${RUN_KIND_LABEL}_${RUN_DATE}"
   SUITE_OUT="${OUT_ROOT}/suite"
   REPORT_OUT="${OUT_ROOT}/report"
 
