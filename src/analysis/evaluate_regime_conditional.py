@@ -815,6 +815,10 @@ def _delivered_msg_key(sender_id: str) -> str:
     return f"delivered_msg_{sender_id}"
 
 
+def _obs_msg_key(sender_id: str, token_idx: int) -> str:
+    return f"obs_msg_{sender_id}_tok{int(token_idx)}"
+
+
 def _build_received_pattern(
     agent_id: str,
     sender_ids: List[str],
@@ -1701,12 +1705,19 @@ def _eval_checkpoint(
                             "recv_pattern": recv_pattern,
                         }
                         row.update(history_features_by_agent[agent_id])
+                        msg_start = int(wrapper.message_start_idx)
                         for sender_id in sender_ids:
+                            sender_idx = int(sender_ids.index(sender_id))
+                            start = msg_start + sender_idx * int(vocab_size)
                             row[_delivered_msg_key(sender_id)] = (
                                 int(current_messages.get(sender_id, 0))
                                 if current_messages is not None
                                 else ""
                             )
+                            for token_idx in range(int(vocab_size)):
+                                row[_obs_msg_key(sender_id, token_idx)] = float(
+                                    aug_obs[agent_id][start + token_idx]
+                                )
                         trace_rows.append(row)
 
                 raw_obs = raw_next
@@ -2152,6 +2163,9 @@ def _write_trace_csv(path: str, rows: List[Dict]):
     delivered_cols = sorted(
         {key for row in rows for key in row.keys() if key.startswith("delivered_msg_")}
     )
+    obs_msg_cols = sorted(
+        {key for row in rows for key in row.keys() if key.startswith("obs_msg_")}
+    )
     fieldnames = [
         "checkpoint",
         "condition",
@@ -2176,6 +2190,7 @@ def _write_trace_csv(path: str, rows: List[Dict]):
         "obs_ewma_coop",
         "own_sent_msg",
         *delivered_cols,
+        *obs_msg_cols,
         "recv_any_m0",
         "recv_any_m1",
         "recv_pattern",

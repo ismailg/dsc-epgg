@@ -350,6 +350,25 @@ def test_zeros_eval_intervention_blanks_message_slice_not_token_zero():
     assert not np.allclose(fixed0_obs["agent_0"][msg_start:], zeros_obs["agent_0"][msg_start:])
 
 
+def test_trace_logs_actual_zeroed_message_tensor(tmp_path: Path):
+    ckpt = _make_checkpoint(tmp_path, "cond1", 446, comm_enabled=True)
+
+    _rows, _comm_rows, _condition_rows, trace_rows, *_rest = evaluate_regime_conditional._eval_checkpoint(
+        checkpoint_path=str(ckpt),
+        n_eval_episodes=1,
+        eval_seed=123,
+        greedy=True,
+        msg_intervention="zeros",
+        collect_semantics=True,
+    )
+
+    assert len(trace_rows) > 0
+    obs_msg_cols = [key for key in trace_rows[0].keys() if key.startswith("obs_msg_")]
+    assert len(obs_msg_cols) == 8
+    for row in trace_rows:
+        assert all(float(row[col]) == 0.0 for col in obs_msg_cols)
+
+
 def test_sender_remap_requires_full_bijection():
     sender_ids = ["agent_0", "agent_1", "agent_2", "agent_3"]
 
@@ -1142,6 +1161,27 @@ def test_clean_msgsource_family_script_preserves_zeroaux_vecstraight_contract():
     assert 'active_pids=("${kept[@]}")' in text
 
 
+def test_zeroaux_crossover_eval_script_reuses_clean_msgsource_roots_without_training():
+    script_path = REPO_ROOT / "scripts" / "run_phase3_vecstraight_zeroaux_crossover_eval.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert "TRAIN_MODES=(learned uniform public_random fixed0)" in text
+    assert "INTERVENTIONS=(none zeros indep_random public_random fixed0 fixed1)" in text
+    assert "phase3_vecstraight_clean_msgsource_learned_15seeds_hetzner_20260410" in text
+    assert "phase3_vecstraight_clean_msgsource_uniform_15seeds_hetzner_20260410" in text
+    assert "phase3_vecstraight_clean_msgsource_public_random_15seeds_hetzner_20260410" in text
+    assert "phase3_vecstraight_clean_msgsource_fixed0_15seeds_hetzner_20260410" in text
+    assert "src.analysis.run_phase3_checkpoint_suite" in text
+    assert "src.analysis.write_phase3_crossover_cell_reports" in text
+    assert "message_stream_sample.csv" in text
+    assert "ELAPSED_SECONDS" in text
+    assert "wall-clock" in text
+    assert "train_${train_mode}_test_${test_mode}" in text
+    assert "train_ppo.py" not in text
+    assert "run_phase3_vecstraight_clean_msgsource_family.sh" not in text
+
+
 def test_clean_msgsource_queue_script_runs_all_modes_on_hetzner():
     script_path = (
         REPO_ROOT / "scripts" / "hetzner_jobs" / "phase3_vecstraight_clean_msgsource_queue_20260410.sh"
@@ -1316,6 +1356,277 @@ def test_iwr_zeroaux_message_history_grid_job_uses_run_dir_inputs_and_project_sc
     assert 'OUT_ROOT="${OUT_ROOT:-${IWR_RUN_DIR}/outputs/eval/phase3_vecstraight_zeroaux_message_history_grid_150000_15seeds_iwr_${RUN_DATE}}"' in text
     assert 'MAX_WORKERS="${MAX_WORKERS:-24}"' in text
     assert './scripts/run_phase3_vecstraight_zeroaux_message_history_grid.sh iwr' in text
+
+
+def test_iwr_zeroaux_crossover_eval_job_uses_synced_inputs_and_eval_script():
+    script_path = REPO_ROOT / "scripts" / "iwr_jobs" / "phase3_vecstraight_zeroaux_crossover_eval_iwr.sh"
+    text = script_path.read_text(encoding="utf-8")
+
+    assert text.startswith("#!/usr/bin/env bash")
+    assert ': "${IWR_RUN_DIR:?IWR_RUN_DIR must be set by the IWR launcher}"' in text
+    assert ': "${IWR_PROJECT_DIR:?IWR_PROJECT_DIR must be set by the IWR launcher}"' in text
+    assert 'EXISTING_ROOT_BASE="${EXISTING_ROOT_BASE:-${IWR_PROJECT_DIR}/inputs/clean_msgsource}"' in text
+    assert 'OUT_BASE="${OUT_BASE:-${IWR_RUN_DIR}/outputs/eval}"' in text
+    assert "run_phase3_vecstraight_zeroaux_crossover_eval.sh\" iwr" in text
+    assert "train_ppo.py" not in text
+    assert "clean_msgsource_family.sh" not in text
+
+
+def test_crossover_cell_report_writer_emits_per_cell_summary_and_seed_diffs(tmp_path: Path):
+    suite_csv = tmp_path / "checkpoint_suite_main.csv"
+    fieldnames = [
+        "checkpoint",
+        "condition",
+        "train_seed",
+        "comm_enabled",
+        "eval_seed",
+        "eval_policy",
+        "ablation",
+        "history_intervention",
+        "sender_remap",
+        "cross_play",
+        "scope",
+        "key",
+        "n_rounds",
+        "coop_rate",
+        "avg_reward",
+        "p_all_cooperate",
+        "avg_welfare",
+        "checkpoint_episode",
+    ]
+    rows = []
+    for seed, natural, zeros in [(101, 0.8, 0.5), (202, 0.6, 0.4)]:
+        for ablation, coop in [("none", natural), ("zeros", zeros)]:
+            rows.append(
+                {
+                    "checkpoint": f"cond1_seed{seed}.pt",
+                    "condition": "cond1",
+                    "train_seed": seed,
+                    "comm_enabled": 1,
+                    "eval_seed": 9001,
+                    "eval_policy": "greedy",
+                    "ablation": ablation,
+                    "history_intervention": "none",
+                    "sender_remap": "none",
+                    "cross_play": "none",
+                    "scope": "f_value",
+                    "key": "3.500",
+                    "n_rounds": 100,
+                    "coop_rate": coop,
+                    "avg_reward": 1.0,
+                    "p_all_cooperate": 0.0,
+                    "avg_welfare": 4.0,
+                    "checkpoint_episode": 150000,
+                }
+            )
+    with suite_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+
+    out_base = tmp_path / "eval"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.analysis.write_phase3_crossover_cell_reports",
+            "--train_suite",
+            "uniform",
+            str(suite_csv),
+            "--out_base",
+            str(out_base),
+            "--run_kind",
+            "local",
+            "--run_date",
+            "20260417",
+            "--checkpoint_episode",
+            "150000",
+            "--f_values",
+            "3.5",
+            "--bootstrap_samples",
+            "10",
+        ],
+        cwd=str(REPO_ROOT),
+        check=True,
+    )
+
+    report_dir = (
+        out_base
+        / "phase3_vecstraight_zeroaux_crossover_train_uniform_test_zeros_15seeds_local_20260417"
+        / "report"
+    )
+    with (report_dir / "intervention_suite_summary.csv").open("r", encoding="utf-8") as f:
+        summary_rows = list(csv.DictReader(f))
+    with (report_dir / "intervention_suite_seedwise_diffs.csv").open("r", encoding="utf-8") as f:
+        diff_rows = list(csv.DictReader(f))
+    with (report_dir / "intervention_suite_paired_stats.csv").open("r", encoding="utf-8") as f:
+        paired_rows = list(csv.DictReader(f))
+
+    assert len(summary_rows) == 1
+    assert summary_rows[0]["ablation"] == "zeros"
+    assert len(diff_rows) == 2
+    assert {row["train_seed"] for row in diff_rows} == {"101", "202"}
+    assert len(paired_rows) == 1
+    assert paired_rows[0]["ablation"] == "zeros"
+
+
+def test_crossover_matrix_summary_script_emits_priority_and_message_validation(tmp_path: Path):
+    root = tmp_path / "eval"
+    run_kind = "iwr"
+    run_date = "20260417"
+    senders = [f"agent_{idx}" for idx in range(4)]
+    obs_cols = [f"obs_msg_{sender}_tok{tok}" for sender in senders for tok in (0, 1)]
+
+    for test_mode, ablation, obs_values in [
+        ("natural", "none", [1.0, 0.0] * 4),
+        ("zeros", "zeros", [0.0, 0.0] * 4),
+    ]:
+        report = (
+            root
+            / f"phase3_vecstraight_zeroaux_crossover_train_uniform_test_{test_mode}_15seeds_{run_kind}_{run_date}"
+            / "report"
+        )
+        report.mkdir(parents=True)
+        with (report / "intervention_suite_summary.csv").open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "condition",
+                    "ablation",
+                    "checkpoint_episode",
+                    "f_value",
+                    "n_seeds",
+                    "mean_coop_rate",
+                    "std_coop_rate",
+                    "sem_coop_rate",
+                    "mean_avg_reward",
+                    "std_avg_reward",
+                    "sem_avg_reward",
+                    "mean_avg_welfare",
+                    "std_avg_welfare",
+                    "sem_avg_welfare",
+                ],
+            )
+            writer.writeheader()
+            for f_value, coop in [("3.500", 0.8), ("5.000", 0.9)]:
+                writer.writerow(
+                    {
+                        "condition": "cond1",
+                        "ablation": ablation,
+                        "checkpoint_episode": 150000,
+                        "f_value": f_value,
+                        "n_seeds": 15,
+                        "mean_coop_rate": coop,
+                        "std_coop_rate": 0.1,
+                        "sem_coop_rate": 0.02,
+                        "mean_avg_reward": 1.0,
+                        "std_avg_reward": 0.1,
+                        "sem_avg_reward": 0.02,
+                        "mean_avg_welfare": 4.0,
+                        "std_avg_welfare": 0.4,
+                        "sem_avg_welfare": 0.08,
+                    }
+                )
+        with (report / "intervention_suite_paired_stats.csv").open(
+            "w", newline="", encoding="utf-8"
+        ) as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "reference_condition",
+                    "reference_ablation",
+                    "condition",
+                    "ablation",
+                    "checkpoint_episode",
+                    "f_value",
+                    "n_pairs",
+                    "natural_mean_coop_rate",
+                    "intervention_mean_coop_rate",
+                    "mean_delta_natural_minus_intervention",
+                    "median_delta_natural_minus_intervention",
+                    "sem_delta_natural_minus_intervention",
+                    "bootstrap_ci_low",
+                    "bootstrap_ci_high",
+                    "n_positive",
+                    "n_negative",
+                    "n_zero",
+                    "sign_flip_p_value",
+                ],
+            )
+            writer.writeheader()
+            for f_value, delta in [("3.500", -0.1), ("5.000", 0.0)]:
+                writer.writerow(
+                    {
+                        "reference_condition": "cond1",
+                        "reference_ablation": "none",
+                        "condition": "cond1",
+                        "ablation": ablation,
+                        "checkpoint_episode": 150000,
+                        "f_value": f_value,
+                        "n_pairs": 15,
+                        "natural_mean_coop_rate": 0.7,
+                        "intervention_mean_coop_rate": 0.8,
+                        "mean_delta_natural_minus_intervention": delta,
+                        "median_delta_natural_minus_intervention": delta,
+                        "sem_delta_natural_minus_intervention": 0.01,
+                        "bootstrap_ci_low": -0.2,
+                        "bootstrap_ci_high": 0.0,
+                        "n_positive": 3,
+                        "n_negative": 12,
+                        "n_zero": 0,
+                        "sign_flip_p_value": 0.05,
+                    }
+                )
+        with (report / "message_stream_sample.csv").open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=["agent_id", *obs_cols])
+            writer.writeheader()
+            writer.writerow(
+                {
+                    "agent_id": "agent_0",
+                    **{col: value for col, value in zip(obs_cols, obs_values)},
+                }
+            )
+
+    out_dir = tmp_path / "analysis"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "src.analysis.summarize_phase3_crossover_matrix",
+            "--crossover_root",
+            str(root),
+            "--out_dir",
+            str(out_dir),
+            "--run_kind",
+            run_kind,
+            "--run_date",
+            run_date,
+            "--train_modes",
+            "uniform",
+            "--test_modes",
+            "natural",
+            "zeros",
+        ],
+        cwd=str(REPO_ROOT),
+        check=True,
+    )
+
+    with (out_dir / "crossover_matrix_summary.csv").open("r", encoding="utf-8") as f:
+        matrix_rows = list(csv.DictReader(f))
+    with (out_dir / "crossover_priority_contrasts.csv").open("r", encoding="utf-8") as f:
+        priority_rows = list(csv.DictReader(f))
+    with (out_dir / "crossover_message_stream_validation.csv").open(
+        "r", encoding="utf-8"
+    ) as f:
+        message_rows = list(csv.DictReader(f))
+
+    assert len(matrix_rows) == 4
+    assert any(row["train_mode"] == "uniform" and row["test_mode"] == "zeros" for row in priority_rows)
+    assert {row["message_validation_ok"] for row in message_rows} == {"1"}
+    assert (out_dir / "crossover_matrix_wide_f3p500.csv").exists()
+    assert "Priority Contrasts" in (out_dir / "crossover_summary.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_recommended_smoke_script_targets_subset_not_full_matrix():
