@@ -20,7 +20,7 @@ header-includes:
   - \providecommand{\fhat}{\hat{f}}
   - \AtBeginDocument{\captionsetup[subtable]{labelformat=empty}\captionsetup[subfigure]{labelformat=empty}}
 abstract: |
-  When agents trained with a communication channel cooperate more than those trained without one, the standard conclusion is that they have learned a shared code. But a gap in cooperation alone cannot tell us whether receivers are decoding sender state or simply benefiting from extra varying input that aids learning without conveying meaning. The distinction matters: mistaking this effect for a genuine protocol leads to overestimating how well learned channels transfer to new partners. We propose a framework for evaluating emergent communication along four properties---encoding, content attribution, receiver influence, and portability---and apply it in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Endowing agents with a communication channel raises cooperation by 35.3--47.9 percentage points at the two focal multipliers by 150k episodes. Messages encode task-relevant information and receivers causally respond to them, yet cooperation does not primarily depend on that content: independent random messages nearly match learned communication during training, uniform-trained policies remain cooperative when the channel is silenced at evaluation, and learned conventions do not transfer across populations. A single shared random bit reproduces little of the benefit, arguing against a classical correlation-device account. We call this pattern scaffolded cooperation: communication-like influence within a trained group without a portable semantic protocol. The framework and its experiment families are defined in setting-agnostic terms; demonstrating their portability to other settings is left to future work.
+  When agents trained with a communication channel cooperate more than those trained without one, the standard conclusion is that they have learned a shared code. But a gap in cooperation alone cannot tell us whether receivers are decoding sender state or simply benefiting from extra varying input that aids learning without conveying meaning. The distinction matters: mistaking this effect for a genuine protocol leads to overestimating how well learned channels transfer to new partners. We propose a framework for evaluating emergent communication along four properties---encoding, content attribution, receiver influence, and portability---and apply it in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Endowing agents with a communication channel substantially raises cooperation. Messages encode task-relevant information and receivers causally respond to them, yet cooperation does not primarily depend on that content: independent random messages nearly match learned communication during training, uniform-trained policies remain cooperative when the channel is silenced at evaluation, and learned conventions do not transfer across populations. A single shared random bit reproduces little of the benefit, arguing against a classical correlation-device account. We call this pattern scaffolded cooperation: communication-like influence within a trained group without a portable semantic protocol. The framework and its experiment families are defined in setting-agnostic terms; demonstrating their portability to other settings is left to future work.
 keywords:
   - emergent communication
   - multi-agent reinforcement learning
@@ -2010,7 +2010,7 @@ The paper makes three contributions, all to the science of evaluating emergent c
 \begin{enumerate}[leftmargin=*,nosep]
   \item \textbf{A four-property evaluation framework.} We distinguish what a communication channel contributes during training from what frozen policies use at evaluation, and show that the two can diverge (Section \ref{sec-content-attribution}). The design fits a single vocabulary across experiments (Table \ref{tbl-eval-design}) and provides a structured basis for assessing claims about learned protocols.
   \item \textbf{A case study demonstrating the framework's diagnostic value.} Applied to a binary-vocabulary public-goods game, the framework returns a four-property profile---encoding passes; content attribution fails as the primary explanation of the cooperation benefit; receiver influence passes but is pair-specific; portability fails under cross-seed transfer---and identifies a phenomenon aggregate metrics would miss. We name it \emph{scaffolded cooperation} and show it is distinct from both classical cheap talk and classical correlation devices.
-  \item \textbf{A set of experiment families}---message-source controls, an endpoint cross-over, sender-influence probes, cross-seed transfer tests, and a sender-encoding decomposition---each with an explicit evidence logic (Appendix B) that specifies what it can and cannot identify. The families are defined in setting-agnostic terms; their application to settings beyond the one studied here is future work.
+  \item \textbf{A set of experiment families}---message-source controls, an endpoint cross-over, sender-influence probes, cross-seed transfer tests, and a sender-encoding decomposition---each with an explicit evidence logic (Appendix \ref{app:alignment}) that specifies what it can and cannot identify. The families are defined in setting-agnostic terms; their application to settings beyond the one studied here is future work.
 \end{enumerate}
 ```
 
@@ -2041,7 +2041,7 @@ The per-contributor return on a unit contributed is $f/N$; cooperation thus pays
 
 ## Communication condition
 
-In the communication condition (\texttt{comm}), agents simultaneously broadcast a binary message $m_i \in \{0,1\}$ before choosing actions. All agents observe the full message vector and know which agent sent each message. Messages have no preassigned meaning. In the no-comm condition (\texttt{no-comm}), no messages are exchanged.
+In the communication condition (\texttt{comm}), agents simultaneously broadcast a binary message $m_i \in \{0,1\}$ before choosing actions. All agents observe the full message vector and know which agent sent each message. Messages have no preassigned meaning. In the no-comm condition (\texttt{no-comm}), no messages are exchanged. Appendix \ref{app:schematic} gives a schematic of the within-round information flow.
 
 ## Training
 
@@ -2783,7 +2783,7 @@ This is consistent with the content-attribution result: if the channel functions
 
 Across the four evaluations, encoding passes: messages carry task-relevant information. Content attribution fails as the primary explanation of the cooperation benefit. Receiver influence passes but is pair-specific and cancels in aggregate. Portability fails under cross-seed transfer. The learned channel affects receivers, but its cooperative benefit is largely explained by training-time input variation and does not yield a portable code. We call this pattern *scaffolded cooperation*: communication-like influence within a trained group without a portable semantic protocol.
 
-Scaffolded cooperation sits between classical cheap talk [@crawford1982strategic], which works through credible content, and correlation devices [@aumann1974subjectivity], which work through shared randomness---though our setting is a cooperation problem rather than an equilibrium-selection problem, so the correlation-device comparator is imperfect. Even read as a shared-cue account, the pattern is neither: a shared random bit fails, arguing against a shared-cue explanation, and four independent bits succeed, so learned content is not needed either. In this setting, independent per-sender variation during training is sufficient; whether it is also necessary, and whether it remains sufficient as vocabulary or population scales, is untested here.
+Scaffolded cooperation sits between classical cheap talk [@crawford1982strategic], which works through credible content, and correlation devices [@aumann1974subjectivity], which work through shared randomness. Shared randomness could in principle help in our setting even though it is a cooperation rather than equilibrium-selection problem---for instance, by letting agents condition on a common signal when private regime estimates disagree. The \texttt{public\_random} control directly tests this and it fails: one shared random bit does not improve cooperation. Four independent bits, however, nearly match learned communication, so learned content is not needed either. In this setting, independent per-sender variation during training is sufficient; whether it is also necessary, and whether it remains sufficient as vocabulary or population scales, is untested here.
 
 ```{python}
 #| echo: false
@@ -2797,33 +2797,43 @@ print(
 )
 ```
 
-These failures motivate the four-family evaluation protocol instantiated above:
-
-```{=latex}
-\begin{enumerate}[leftmargin=*,nosep]
-  \item sender-encoding diagnostics;
-  \item content-attribution tests that separate training-time source controls from endpoint cross-overs;
-  \item receiver-influence probes;
-  \item portability tests via cross-population transfer.
-\end{enumerate}
-```
-
-In our case study, the four families were jointly necessary: no single one would have distinguished learned content from useful channel structure. Which families remain informative in other settings likely depends on vocabulary size, population size, and architecture, and is an empirical question we leave to future work.
-
-The gap between learned and random messages bounds the content contribution during training; endpoint cross-over tests runtime reliance; the gap between same-seed and cross-seed performance bounds portability.
+These failures motivate the four-family evaluation protocol instantiated above: sender-encoding diagnostics; content-attribution tests that separate training-time source controls from endpoint cross-overs; receiver-influence probes; and portability tests via cross-population transfer. In our case study, the four families were jointly necessary: no single one would have distinguished learned content from useful channel structure. The learned-random gap bounds the training-time content contribution; endpoint cross-over tests runtime reliance; and same- versus cross-seed performance bounds portability. Which families remain informative in other settings likely depends on vocabulary size, population size, and architecture, and is an empirical question we leave to future work.
 
 **Future directions.** Each failed test suggests interventions worth testing. Content-dependence might be raised by sender-side information bottlenecks or by receiver architectures (recurrent or state-space) that separate sender identity from signal content. Portability might be improved by population-based training, cross-play regularization, or training objectives rewarding inter-population compatibility. Which lever matters most is an empirical question our framework is designed to ask.
 
-## Limitations
+**Limitations.** The central result---that uniform random messages nearly match learned communication---is established in a binary-vocabulary setting. The message-source family does not isolate which aspect of per-sender variation drives the effect, and uses full-history agents only, so whether the equivalence holds under reduced history is untested. We do not test how the learned--uniform comparison scales with vocabulary size here; that question requires a dedicated matched experiment rather than extrapolation from the binary case. Learned-trained policies also show small but real channel dependence at evaluation that scaffolded cooperation alone does not fully explain. Three candidate sources---residual content decoding, more finely tuned message statistics, or sender--receiver coadaptation during training---remain to be distinguished in future experiments.
 
-The central result---that uniform random messages nearly match learned communication---is established in a binary-vocabulary setting. The message-source family does not isolate which aspect of per-sender variation drives the effect, and uses full-history agents only, so whether the equivalence holds under reduced history is untested. We do not test how the learned--uniform comparison scales with vocabulary size here; that question requires a dedicated matched experiment rather than extrapolation from the binary case. Learned-trained policies also show small but real channel dependence at evaluation that scaffolded cooperation alone does not fully explain. Three candidate sources---residual content decoding, more finely tuned message statistics, or sender--receiver coadaptation during training---remain to be distinguished in future experiments.
+```{=latex}
+\clearpage
+```
 
-The factorial removes all temporal inputs together, so which specific features mediate the interaction is unknown; the result also applies only to feed-forward policies. Cross-seed transfer uses direct zero-shot substitution with a fixed receiver; richer transfer methods remain untested. Finally, this is a single-game, four-agent case study; the recommendations need validation in other settings.
+# References {.unnumbered}
+
+::: {#refs}
+:::
 
 ```{=latex}
 \clearpage
 \appendix
 \section*{Appendix}
+```
+
+# Environment and policy schematic {#app:schematic}
+
+Figure \ref{fig-schematic-setup} summarizes the environment timing and the communication-enabled policy input flow. Panel A shows the per-round sequence: agents receive noisy private regime signals, simultaneously broadcast messages, choose actions, and then receive payoffs from the shared pool. Panel B separates the two within-round policy inputs: the sender head uses the non-message state and previous-round messages before broadcast, while the action and value heads use the same non-message state plus the current-round message vector after broadcast.
+
+```{python}
+#| echo: false
+#| output: asis
+print(
+    render_figure_here(
+        "fig-schematic-setup",
+        r"Schematic of the environment and policy input timing. A: four-agent extended public goods game with hidden regime switching, noisy private regime signals, simultaneous binary messages, actions, and split rewards. B: within-round input flow for a communication-enabled agent. The sender head $\psi$ uses non-message inputs plus previous-round messages to emit $m_{i,t}$; after simultaneous broadcast, the action and value heads use the same non-message inputs plus the current message vector $m_{\cdot,t}$. Agent inputs exclude reward, true $f_t$, and own welfare.",
+        MANUSCRIPT_ROOT / "figures" / "schematic_setup.pdf",
+        width=r"0.82\linewidth",
+        position="H",
+    )
+)
 ```
 
 # Architecture and training objective {#app:objective}
@@ -3234,7 +3244,7 @@ plt.close(fig)
 print(
     render_figure_here(
         "fig-sender-probe-signed",
-        r"Signed sender-probe means for the focal regimes. Each heatmap cell shows the signed mean change in receiver cooperation probability when forcing one sender's token to 1 rather than 0 for a given receiver (mean $\Delta P(C)$ in pp over 15 seeds). Red means token 1 increases cooperation; blue means token 1 decreases cooperation. The smaller signed means relative to the absolute-magnitude heatmaps in Figure \ref{fig-endpoint-panels} show directional cancellation across seeds.",
+        r"Cross-seed cancellation of signed sender-probe effects. Each heatmap cell shows the signed mean change in receiver cooperation when forcing one sender's token to 1 rather than 0, averaged across 15 seeds. Because sender polarities differ across seeds, positive and negative effects can cancel; small signed means therefore indicate direction instability, not absence of within-seed receiver influence. Figure \ref{fig-endpoint-panels} shows absolute effect magnitudes.",
         signed_sender_fig_path,
         width=r"0.76\linewidth",
         position="H",

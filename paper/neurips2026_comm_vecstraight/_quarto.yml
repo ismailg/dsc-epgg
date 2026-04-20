@@ -16,7 +16,7 @@ format:
       - title.tex
     include-in-header:
       - text: |
-          \usepackage{neurips_2026}
+          \usepackage[eandd]{neurips_2026}
           \AtEndDocument{\clearpage\input{checklist_filled.tex}}
 
 bibliography: refs.bib
