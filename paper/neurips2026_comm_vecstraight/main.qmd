@@ -1,7 +1,7 @@
 ---
 title: |
   What Does Emergent Communication Actually Communicate?
-  Separating Channel Structure from Learned Content in a Social Dilemma
+  An Evaluation Framework Separating Channel Structure from Learned Content
 author:
   - name: Anonymous
     affiliation:
@@ -20,7 +20,7 @@ header-includes:
   - \providecommand{\fhat}{\hat{f}}
   - \AtBeginDocument{\captionsetup[subtable]{labelformat=empty}\captionsetup[subfigure]{labelformat=empty}}
 abstract: |
-  When agents trained with a communication channel cooperate more than those trained without one, the standard conclusion is that they have learned a shared code. But a gap in cooperation alone cannot tell us whether receivers are decoding sender state or simply benefiting from extra varying input that aids learning without conveying meaning. The distinction matters: mistaking this effect for a genuine protocol leads to overestimating how well learned channels transfer to new partners. We propose a framework for evaluating emergent communication along four properties---encoding, content attribution, receiver influence, and portability---and apply it in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Endowing agents with a communication channel raises cooperation by 35.3--47.9 percentage points at the two focal multipliers by 150k episodes. Messages encode task-relevant information and receivers causally respond to them, yet cooperation does not primarily depend on that content: independent random messages nearly match learned communication during training, uniform-trained policies remain cooperative when the channel is silenced at evaluation, and learned conventions do not transfer across populations. A single shared random bit reproduces little of the benefit, arguing against a classical correlation-device account. We call this pattern scaffolded coordination: communication-like influence within a trained group without a portable semantic protocol. The framework and experiment families generalize beyond this setting.
+  When agents trained with a communication channel cooperate more than those trained without one, the standard conclusion is that they have learned a shared code. But a gap in cooperation alone cannot tell us whether receivers are decoding sender state or simply benefiting from extra varying input that aids learning without conveying meaning. The distinction matters: mistaking this effect for a genuine protocol leads to overestimating how well learned channels transfer to new partners. We propose a framework for evaluating emergent communication along four properties---encoding, content attribution, receiver influence, and portability---and apply it in a four-agent public-goods game with hidden regime switching, noisy private observations, and an optional binary message channel. Endowing agents with a communication channel raises cooperation by 35.3--47.9 percentage points at the two focal multipliers by 150k episodes. Messages encode task-relevant information and receivers causally respond to them, yet cooperation does not primarily depend on that content: independent random messages nearly match learned communication during training, uniform-trained policies remain cooperative when the channel is silenced at evaluation, and learned conventions do not transfer across populations. A single shared random bit reproduces little of the benefit, arguing against a classical correlation-device account. We call this pattern scaffolded cooperation: communication-like influence within a trained group without a portable semantic protocol. The framework and its experiment families are defined in setting-agnostic terms; demonstrating their portability to other settings is left to future work.
 keywords:
   - emergent communication
   - multi-agent reinforcement learning
@@ -925,6 +925,9 @@ def crossover_max_abs_delta(train, f_value, tests):
 NONORACLE_SUMMARY_ROWS = load_csv(
     TRANSFER_ROOT / "summary" / "nonoracle_alignment_summary_by_f.csv"
 )
+NONORACLE_RECEIVER_ROWS = load_csv(
+    TRANSFER_ROOT / "summary" / "nonoracle_alignment_receiver_summary.csv"
+)
 NONORACLE_LOOKUP = {
     (row["rule_name"], f"{float(row['f_value']):.1f}", row["metric"]): row
     for row in NONORACLE_SUMMARY_ROWS
@@ -933,6 +936,22 @@ NONORACLE_LOOKUP = {
 
 def nonoracle_value(rule_name, f_value, metric):
     return float(NONORACLE_LOOKUP[(rule_name, f"{float(f_value):.1f}", metric)]["value"])
+
+
+def nonoracle_receiver_values(rule_name, f_value, field):
+    values = [
+        float(row[field])
+        for row in NONORACLE_RECEIVER_ROWS
+        if row["rule_name"] == rule_name
+        and f"{float(row['f_value']):.1f}" == f"{float(f_value):.1f}"
+    ]
+    if len(values) != 15:
+        raise ValueError((rule_name, f_value, field, len(values)))
+    return values
+
+
+def nonoracle_receiver_mean_sem(rule_name, f_value, field):
+    return mean_and_sem(nonoracle_receiver_values(rule_name, f_value, field))
 
 
 # --- Aggregate-cancellation and polarity-alignment data (for appendix) ---
@@ -1960,7 +1979,7 @@ def render_nonoracle_transfer_table():
 
 # Introduction {#sec-intro}
 
-Claims about emergent communication between AI agents rest on evaluation practices whose assumptions are rarely tested. When agents given a communication channel cooperate more than those without one, the standard interpretation is that they have learned a shared code. But a cooperation gap alone cannot distinguish learned content from useful channel structure, and the distinction matters: a channel that looks communicative in one population may be partner-specific and fail to transfer. This paper treats the evaluation of emergent communication as the object of study: we ask what current practice concludes from a cooperation gap, identify assumptions under which those conclusions fail, and propose an evaluation framework that separates them.
+Claims about emergent communication between AI agents rest on evaluation practices whose assumptions are rarely tested. When agents given a communication channel cooperate more than those without one, the standard interpretation is that they have learned a shared code. But a cooperation gap alone cannot distinguish learned content from useful channel structure, and the distinction matters: a channel that looks communicative in one population may be partner-specific and fail to transfer. This paper treats the evaluation of emergent communication as the object of study: we ask what current practice concludes from a cooperation gap, identify assumptions under which those conclusions can fail, and propose an evaluation framework that separates them, demonstrated here in a diagnostic case study.
 
 That shared-code interpretation has a specific form in the literature: senders encode task-relevant information, receivers decode it, and the resulting coordination reflects the information carried by the messages [@foerster2016learning; @sukhbaatar2016learning; @lazaridou2017multi; @havrylov2017emergence; @mordatch2018emergence]. It is usually evaluated with endpoint metrics---cooperation rates, mutual information between messages and task variables, and topographic similarity (a measure of whether similar meanings receive similar messages) [@lazaridou2020emergent].
 
@@ -1981,7 +2000,7 @@ We distinguish *communication-like influence*---a measurable causal effect of me
 
 Together, the four properties follow the causal chain from sender state to receiver behavior to cross-population use. A channel passing all four meets our definition of portable semantic communication; failing any one weakens the claim, though cooperation benefits may persist.
 
-Applied as a diagnostic, the framework reveals a pattern aggregate metrics would miss, which we call *scaffolded coordination*: messages carry task-relevant information and causally influence receivers within a trained group, yet the cooperation benefit is not primarily attributable to message content and learned conventions do not transfer across populations. It sits between classical cheap talk and classical correlation devices: its cooperation benefit is explained primarily by neither learned content nor shared randomness. The finding matters methodologically: it exists in the gap between training-time sufficiency and endpoint dependence that standard evaluation practice does not separate.
+Applied as a diagnostic, the framework reveals a pattern aggregate metrics would miss, which we call *scaffolded cooperation*: messages carry task-relevant information and causally influence receivers within a trained group, yet the cooperation benefit is not primarily attributable to message content and learned conventions do not transfer across populations. It sits between classical cheap talk and classical correlation devices: its cooperation benefit is explained primarily by neither learned content nor shared randomness. The finding matters methodologically: it exists in the gap between training-time sufficiency and endpoint dependence that standard evaluation practice does not separate.
 
 We demonstrate the framework on a four-agent extension of the public goods game of @orzan2024pgg, with hidden within-episode regime switching, noisy private observations, and optional binary communication. Three features make this setup well suited to the question. A hidden regime factor that crosses the cooperation threshold from both sides lets us test a near-threshold regime, where cooperation is collectively valuable but individually costly, and a high regime, where any benefit cannot be explained as agents discovering that cooperation pays. Noisy observations of a switching regime give senders private information a semantic protocol could in principle transmit, so a failure of content attribution is not easily explained by absent communicable information. A four-agent binary channel keeps the critical control clean: a single shared random bit tests the classical correlation-device account, while four independent random bits test whether per-sender variation alone suffices. All key quantities---regime, sender identity, messages, intended and executed actions---are controlled and logged, so each test uses ground-truth comparisons rather than proxies.
 
@@ -1990,8 +2009,8 @@ The paper makes three contributions, all to the science of evaluating emergent c
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
   \item \textbf{A four-property evaluation framework.} We distinguish what a communication channel contributes during training from what frozen policies use at evaluation, and show that the two can diverge (Section \ref{sec-content-attribution}). The design fits a single vocabulary across experiments (Table \ref{tbl-eval-design}) and provides a structured basis for assessing claims about learned protocols.
-  \item \textbf{A case study demonstrating the framework's diagnostic value.} Applied to a binary-vocabulary public-goods game, the framework returns a four-property profile---encoding passes; content attribution fails as the primary explanation of the cooperation benefit; receiver influence passes but is pair-specific; portability fails under cross-seed transfer---and identifies a phenomenon aggregate metrics would miss. We name it \emph{scaffolded coordination} and show it is distinct from both classical cheap talk and classical correlation devices.
-  \item \textbf{A set of reusable experiment families}---message-source controls, an endpoint cross-over, sender-influence probes, cross-seed transfer tests, and a sender-encoding decomposition---that other researchers can apply to diagnose the same encoding--attribution--portability dissociation in their own settings.
+  \item \textbf{A case study demonstrating the framework's diagnostic value.} Applied to a binary-vocabulary public-goods game, the framework returns a four-property profile---encoding passes; content attribution fails as the primary explanation of the cooperation benefit; receiver influence passes but is pair-specific; portability fails under cross-seed transfer---and identifies a phenomenon aggregate metrics would miss. We name it \emph{scaffolded cooperation} and show it is distinct from both classical cheap talk and classical correlation devices.
+  \item \textbf{A set of experiment families}---message-source controls, an endpoint cross-over, sender-influence probes, cross-seed transfer tests, and a sender-encoding decomposition---each with an explicit evidence logic (Appendix B) that specifies what it can and cannot identify. The families are defined in setting-agnostic terms; their application to settings beyond the one studied here is future work.
 \end{enumerate}
 ```
 
@@ -2054,18 +2073,27 @@ Appendix \ref{app:alignment} includes a detailed evidence guide for what each fa
 #| echo: false
 #| output: asis
 import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
 import numpy as np
+from matplotlib.lines import Line2D
 
 f_targets = [("3.500", r"$f = 3.5$"), ("5.000", r"$f = 5.0$")]
 checkpoints = [25, 50, 100, 150]
 
 gap_color = "#c23b22"
-fig, axes = plt.subplots(2, 2, figsize=(6.85, 4.55), sharex=False)
+fig = plt.figure(figsize=(7.15, 2.28))
+gs = fig.add_gridspec(1, 5, width_ratios=[1.0, 1.0, 0.28, 1.0, 1.0])
+axes = np.array(
+    [
+        fig.add_subplot(gs[0, 0]),
+        fig.add_subplot(gs[0, 1]),
+        fig.add_subplot(gs[0, 3]),
+        fig.add_subplot(gs[0, 4]),
+    ]
+)
 gap_axes = []
 panel_labels = ["A", "B", "C", "D"]
 
-for idx, (ax, (f_key, title)) in enumerate(zip(axes[0], f_targets)):
+for idx, (ax, (f_key, title)) in enumerate(zip(axes[:2], f_targets)):
     subset = [r for r in GAP_ROWS if r["f_value"] == f_key]
     subset = sorted(subset, key=lambda r: int(r["checkpoint_episode"]))
 
@@ -2076,40 +2104,40 @@ for idx, (ax, (f_key, title)) in enumerate(zip(axes[0], f_targets)):
     nocomm_sem = [100.0 * float(r["new_cond2_sem"]) for r in subset]
     gap = [100.0 * float(r["new_gap"]) for r in subset]
 
-    ax.errorbar(xs, comm, yerr=comm_sem, fmt="o-", color="#1b7f3b", lw=1.8, ms=4.5, capsize=3)
-    ax.errorbar(xs, nocomm, yerr=nocomm_sem, fmt="s-", color="#4d4d4d", lw=1.8, ms=4.2, capsize=3)
-    ax.set_title(f"Gap: {title}", fontsize=8.8, pad=3)
+    ax.errorbar(xs, comm, yerr=comm_sem, fmt="o-", color="#1b7f3b", lw=1.35, ms=3.4, capsize=2)
+    ax.errorbar(xs, nocomm, yerr=nocomm_sem, fmt="s-", color="#4d4d4d", lw=1.35, ms=3.2, capsize=2)
+    ax.set_title(f"Gap: {title}", fontsize=7.4, pad=2)
     ax.set_xticks(checkpoints)
-    ax.set_xlabel("Checkpoint (k episodes)", fontsize=8)
+    ax.set_xlabel("Checkpoint (k)", fontsize=6.8)
     ax.set_ylim(20, 100)
     ax.spines["top"].set_visible(False)
-    ax.tick_params(labelsize=7)
-    ax.text(-0.18, 1.06, panel_labels[idx], transform=ax.transAxes, fontsize=10, fontweight="bold")
+    ax.tick_params(labelsize=6.4)
+    if idx == 0:
+        ax.set_ylabel("Cooperation (%)", fontsize=6.8)
+    ax.grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.55)
+    ax.text(-0.20, 1.07, panel_labels[idx], transform=ax.transAxes, fontsize=8.5, fontweight="bold")
 
     gap_ax = ax.twinx()
-    gap_ax.plot(xs, gap, "D--", color=gap_color, lw=1.5, ms=4.0, label="gap")
+    gap_ax.plot(xs, gap, "D--", color=gap_color, lw=1.1, ms=3.0, label="gap")
     gap_ax.axhline(0, color=gap_color, lw=0.8, alpha=0.5)
     gap_ax.set_ylim(-6, 55)
     gap_ax.spines["top"].set_visible(False)
     gap_ax.spines["right"].set_color(gap_color)
     gap_ax.spines["right"].set_linewidth(0.9)
-    gap_ax.tick_params(axis="y", colors=gap_color, labelsize=7)
+    gap_ax.tick_params(axis="y", colors=gap_color, labelsize=6.2, right=(idx == 1), labelright=(idx == 1))
+    gap_ax.spines["right"].set_visible(idx == 1)
+    if idx == 1:
+        gap_ax.set_ylabel("Gap (pp)", color=gap_color, fontsize=6.8, labelpad=2)
     gap_axes.append(gap_ax)
-
-axes[0, 0].set_ylabel("Cooperation (%)", fontsize=8)
-gap_axes[-1].set_ylabel("Comm gap (pp)", color=gap_color, fontsize=8)
-
-for ax in axes[0]:
-    ax.grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.6)
 
 factorial_cells = [
     ("with_comm_full_history", "with_comm_reduced_history", "comm"),
     ("without_comm_full_history", "without_comm_reduced_history", "no-comm"),
 ]
 bar_colors = {"comm": "#1b7f3b", "no-comm": "#4d4d4d"}
-bar_width = 0.32
+bar_width = 0.34
 
-for idx, (ax, (f_val, title)) in enumerate(zip(axes[1], [("3.5", r"$f = 3.5$"), ("5.0", r"$f = 5.0$")]), start=2):
+for idx, (ax, (f_val, title)) in enumerate(zip(axes[2:], [("3.5", r"$f = 3.5$"), ("5.0", r"$f = 5.0$")]), start=2):
     x_pos = np.arange(2)
     for j, (full_cell, red_cell, label) in enumerate(factorial_cells):
         means = [
@@ -2131,34 +2159,33 @@ for idx, (ax, (f_val, title)) in enumerate(zip(axes[1], [("3.5", r"$f = 3.5$"), 
             edgecolor="black",
             linewidth=0.5,
         )
-    ax.set_title(f"Factorial: {title}", fontsize=8.8, pad=3)
+    ax.set_title(f"Scope: {title}", fontsize=7.4, pad=2)
     ax.set_xticks(x_pos)
-    ax.set_xticklabels(["Full history", "Reduced history"], fontsize=7)
+    ax.set_xticklabels(["Full", "Reduced"], fontsize=6.4)
+    ax.set_ylim(0, 100)
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.tick_params(labelsize=7)
-    ax.grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.6)
-    ax.text(-0.18, 1.06, panel_labels[idx], transform=ax.transAxes, fontsize=10, fontweight="bold")
-
-axes[1, 0].set_ylabel("Cooperation (%)", fontsize=8)
+    ax.tick_params(labelsize=6.4)
+    ax.grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.55)
+    ax.text(-0.20, 1.07, panel_labels[idx], transform=ax.transAxes, fontsize=8.5, fontweight="bold")
 
 handles = [
-    Line2D([0], [0], color="#1b7f3b", marker="o", lw=1.8, ms=4.5, label="comm"),
-    Line2D([0], [0], color="#4d4d4d", marker="s", lw=1.8, ms=4.2, label="no-comm"),
-    Line2D([0], [0], color=gap_color, marker="D", lw=1.5, ls="--", ms=4.0, label="gap"),
+    Line2D([0], [0], color="#1b7f3b", marker="o", lw=1.35, ms=3.4, label="comm"),
+    Line2D([0], [0], color="#4d4d4d", marker="s", lw=1.35, ms=3.2, label="no-comm"),
+    Line2D([0], [0], color=gap_color, marker="D", lw=1.1, ls="--", ms=3.0, label="gap"),
 ]
 fig.legend(
     handles=handles,
     frameon=False,
     loc="upper center",
     ncol=3,
-    bbox_to_anchor=(0.5, 1.04),
-    fontsize=8,
-    columnspacing=1.0,
-    handletextpad=0.5,
+    bbox_to_anchor=(0.5, 1.05),
+    fontsize=6.8,
+    columnspacing=0.8,
+    handletextpad=0.4,
 )
 
-fig.subplots_adjust(left=0.09, right=0.94, bottom=0.10, top=0.82, hspace=0.48, wspace=0.32)
+fig.subplots_adjust(left=0.07, right=0.975, bottom=0.19, top=0.76, wspace=0.18)
 training_fig_path = GENERATED_FIG_ROOT / "fig-training-panels.pdf"
 fig.savefig(training_fig_path, bbox_inches="tight")
 plt.close(fig)
@@ -2257,7 +2284,7 @@ uniform_p_35 = fmt_num(clean_msg_paired_p("uniform", "learned", "150000", "3.500
 uniform_p_50 = fmt_num(clean_msg_paired_p("uniform", "learned", "150000", "5.000"), 3)
 print(
     f"Independent random messages ({tex_tt('uniform')}) are not distinguishable from learned communication in paired seedwise sign tests ($p={uniform_p_35}$ at $f=3.5$; $p={uniform_p_50}$ at $f=5.0$). A single shared random bit ({tex_tt('public_random')}) is not: it collapses to roughly no-comm levels. Constant channels are worse still---{tex_tt('fixed0')} and {tex_tt('fixed1')} are {fixed_seed_phrase} and {fixed_nocomm_phrase}. Seedwise sign counts and matched-design provenance are in Appendix \\ref{{app:msgsource}}.\n\n"
-    f"Two findings follow. First, a substitute that carries no learned meaning reproduces nearly all the training-time benefit, so learned content is not the primary driver. Second, the substitute must provide *independent per-sender variation*: four independent bits give 16 distinguishable sender-pattern combinations, letting receivers condition on which sender produced which token during training---even when those tokens carry no learned meaning. This is the mechanism of scaffolded coordination (Section \\ref{{sec-discussion}})."
+    f"Two findings follow. First, a substitute that carries no learned meaning reproduces nearly all the training-time benefit, so learned content is not the primary driver. Second, the substitute must provide *independent per-sender variation*: four independent bits give 16 distinguishable sender-pattern combinations, letting receivers condition on which sender produced which token during training---even when those tokens carry no learned meaning. This is the mechanism of scaffolded cooperation (Section \\ref{{sec-discussion}})."
 )
 ```
 
@@ -2271,15 +2298,10 @@ import numpy as np
 from collections import defaultdict
 from matplotlib.patches import Rectangle
 
-fig = plt.figure(figsize=(6.95, 5.0))
-gs = fig.add_gridspec(2, 3, width_ratios=[1.0, 1.0, 0.07], height_ratios=[1.0, 1.0])
-axes = np.array(
-    [
-        [fig.add_subplot(gs[0, 0]), fig.add_subplot(gs[0, 1])],
-        [fig.add_subplot(gs[1, 0]), fig.add_subplot(gs[1, 1])],
-    ]
-)
-cax = fig.add_subplot(gs[1, 2])
+fig = plt.figure(figsize=(7.15, 2.85))
+gs = fig.add_gridspec(1, 5, width_ratios=[0.92, 0.88, 1.42, 1.42, 0.06])
+axes = np.array([fig.add_subplot(gs[0, idx]) for idx in range(4)])
+cax = fig.add_subplot(gs[0, 4])
 panel_labels = ["A", "B", "C", "D"]
 
 crossover_tests_main = [
@@ -2299,7 +2321,7 @@ f_specs = [
 ]
 
 legend_handles = []
-for idx, (ax, (train_mode, title)) in enumerate(zip(axes[0], crossover_panels)):
+for idx, (ax, (train_mode, title)) in enumerate(zip(axes[:2], crossover_panels)):
     y_pos = np.arange(len(crossover_tests_main))
     for f_val, f_label, color, offset, marker in f_specs:
         xs = []
@@ -2327,9 +2349,9 @@ for idx, (ax, (train_mode, title)) in enumerate(zip(axes[0], crossover_panels)):
                 color=color,
                 markerfacecolor=color if sig else "white",
                 markeredgecolor=color,
-                markersize=5.0,
-                markeredgewidth=1.1,
-                linewidth=1.4,
+                markersize=4.2,
+                markeredgewidth=1.0,
+                linewidth=1.15,
                 capsize=0,
                 zorder=3,
             )
@@ -2341,27 +2363,30 @@ for idx, (ax, (train_mode, title)) in enumerate(zip(axes[0], crossover_panels)):
         ]
 
     ax.set_yticks(y_pos)
-    ax.set_yticklabels([label for _, label in crossover_tests_main], fontsize=7)
-    ax.set_xlabel("Intervention minus natural (pp)", fontsize=8)
-    ax.set_title(title, fontsize=8.8, pad=3)
+    if idx == 0:
+        ax.set_yticklabels([label for _, label in crossover_tests_main], fontsize=6.6)
+    else:
+        ax.set_yticklabels([])
+    ax.set_xlabel(r"$\Delta$ vs natural (pp)", fontsize=6.8)
+    ax.set_title(title, fontsize=7.4, pad=2)
     ax.axvline(0, color="black", linewidth=0.7, linestyle="-")
     ax.invert_yaxis()
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.tick_params(labelsize=7)
-    ax.grid(axis="x", color="#cccccc", alpha=0.35, linewidth=0.6)
+    ax.tick_params(labelsize=6.4)
+    ax.grid(axis="x", color="#cccccc", alpha=0.35, linewidth=0.55)
     ax.set_xlim(-14.0, 10.0)
-    ax.text(-0.18, 1.06, panel_labels[idx], transform=ax.transAxes, fontsize=10, fontweight="bold")
+    ax.text(-0.18, 1.07, panel_labels[idx], transform=ax.transAxes, fontsize=8.5, fontweight="bold")
 
 fig.legend(
     handles=legend_handles,
     frameon=False,
-    fontsize=7,
+    fontsize=6.8,
     loc="upper center",
-    bbox_to_anchor=(0.5, 0.985),
+    bbox_to_anchor=(0.30, 1.03),
     ncol=2,
     handletextpad=0.4,
-    columnspacing=1.0,
+    columnspacing=0.8,
 )
 
 sender_matrix_rows = SENDER_CAUSAL_MATRIX_ROWS
@@ -2388,43 +2413,30 @@ for f_value, _ in f_panels:
 
 sender_vmax = max(v for panel in sender_panels for row in panel for v in row)
 
-for idx, (ax, panel, (_, title)) in enumerate(zip(axes[1], sender_panels, f_panels), start=2):
+for idx, (ax, panel, (_, title)) in enumerate(zip(axes[2:4], sender_panels, f_panels), start=2):
     im = ax.imshow(panel, cmap="YlOrRd", vmin=0.0, vmax=sender_vmax)
-    ax.set_title(f"Sender probe: {title}", fontsize=8.8, pad=3)
+    ax.set_box_aspect(1.0)
+    ax.set_title(f"Probe: {title}", fontsize=7.4, pad=2)
     ax.set_xticks(range(len(receiver_ids)))
-    ax.set_xticklabels([rid.replace("agent_", "A") for rid in receiver_ids], fontsize=8)
+    ax.set_xticklabels([rid.replace("agent_", "A") for rid in receiver_ids], fontsize=6.8)
     ax.set_yticks(range(len(sender_ids)))
     if idx == 2:
-        ax.set_yticklabels([sid.replace("agent_", "A") for sid in sender_ids], fontsize=8)
+        ax.set_yticklabels([sid.replace("agent_", "A") for sid in sender_ids], fontsize=6.8)
     else:
         ax.set_yticklabels([])
-    ax.set_xlabel("Receiver")
+    ax.set_xlabel("Receiver", fontsize=6.8)
     for i in range(len(sender_ids)):
         for j in range(len(receiver_ids)):
-            ax.text(j, i, f"{panel[i][j]:.1f}", ha="center", va="center", fontsize=7.5, color="black")
+            ax.text(j, i, f"{panel[i][j]:.1f}", ha="center", va="center", fontsize=5.9, color="black")
         ax.add_patch(Rectangle((i - 0.5, i - 0.5), 1, 1, fill=False, edgecolor="black", linewidth=1.0))
-    ax.text(-0.18, 1.06, panel_labels[idx], transform=ax.transAxes, fontsize=10, fontweight="bold")
+    ax.text(-0.18, 1.07, panel_labels[idx], transform=ax.transAxes, fontsize=8.5, fontweight="bold")
 
-axes[1, 0].set_ylabel("Sender")
+axes[2].set_ylabel("Sender", fontsize=6.8)
 cbar = fig.colorbar(im, cax=cax)
-cbar.set_label(r"Mean $|\Delta P(C)|$ (pp)", fontsize=8)
-cbar.ax.tick_params(labelsize=7)
+cbar.set_label(r"Mean $|\Delta P(C)|$ (pp)", fontsize=6.6)
+cbar.ax.tick_params(labelsize=6.0)
 
-fig.subplots_adjust(left=0.11, right=0.94, bottom=0.09, top=0.88, hspace=0.38, wspace=0.28)
-
-# Manually place the bottom row so the heatmaps sit visibly farther left
-# and the colorbar is tucked closer to Panel D.
-bottom_y0 = axes[1, 0].get_position().y0
-bottom_h = axes[1, 0].get_position().height
-bottom_left_x = 0.145
-bottom_w = 0.285
-bottom_gap = 0.075
-cbar_gap = 0.018
-cbar_w = 0.020
-
-axes[1, 0].set_position([bottom_left_x, bottom_y0, bottom_w, bottom_h])
-axes[1, 1].set_position([bottom_left_x + bottom_w + bottom_gap, bottom_y0, bottom_w, bottom_h])
-cax.set_position([bottom_left_x + 2 * bottom_w + bottom_gap + cbar_gap, bottom_y0, cbar_w, bottom_h])
+fig.subplots_adjust(left=0.105, right=0.985, bottom=0.15, top=0.82, wspace=0.30)
 
 endpoint_fig_path = GENERATED_FIG_ROOT / "fig-endpoint-panels.pdf"
 fig.savefig(endpoint_fig_path, bbox_inches="tight")
@@ -2496,57 +2508,254 @@ print(
     f"Single-sender interventions produce negligible effects at the low multipliers (Appendix \\ref{{app:sender-probe-table}}, Table \\ref{{tbl-sender-causal}}) but become large at the focal regimes. The mean absolute per-sender effect is {sender_eff} at 150k across sender--receiver pairs and seeds. Panels C--D of Figure \\ref{{fig-endpoint-panels}} show the full intervention matrix.\n\n"
     f"Effects are clearly non-zero, but the direction of influence varies both within a single trained group and across independently trained seeds: across the {focal_cell_count} sender--receiver cells at each focal multiplier ({reversal_stats_1pp['total']} total), signed per-pair effects flip direction across seeds in every cell above a {ppnum_math(reversal_stats_1pp['threshold_pp'])} minimum effect. The result is not driven only by near-zero noise: requiring at least {ppnum_math(reversal_stats_10pp['threshold_pp'])} in both directions still gives reversals in {reversal_stats_10pp['count']} of {reversal_stats_10pp['total']} cells. Appendix \\ref{{app:sender-probe-table}}, Figure \\ref{{fig-sender-probe-signed}} shows the signed cross-seed means directly.\n\n"
     f"Observational rollouts corroborate the pair-specificity. Two message patterns with the same number of ones can produce very different cooperation rates if the ones come from different sender slots. The median cooperation gap between the best and worst such pattern reaches {ppnum_math(pattern_max_gap_pp('3.5'))} at $f=3.5$ and {ppnum_math(pattern_max_gap_pp('5.0'))} at $f=5.0$, while the {tt_at} split---does anyone have a 1?---moves cooperation by only {pp_math(any_token_delta('3.5'))} and {pp_math(any_token_delta('5.0'))}.\n\n"
-    f"Pair-specificity has a direct methodological consequence. Because senders within the same group assign opposite meanings to the same token, per-sender effects ({sender_eff}) cancel when pooled, leaving an aggregate any-token effect of {agg_eff}, with mixed sender polarities in {mixed_regime_seeds} of {mixed_regime_total} seeds (Appendix \\ref{{app:aggregate-cancellation}}). Any evaluation that pools across senders before testing for sender-specific structure---including mutual information, topographic similarity, and pooled token effects---will systematically under-detect receiver influence in channels of this type. This is the receiver-influence property of the framework (Table \\ref{{tbl-eval-design}}): it passes, but only pair-specifically. The pair-specificity connects directly to scaffolded coordination (Section \\ref{{sec-discussion}}): senders within a group have learned different private conventions rather than a shared code, which is what independent per-sender variation during training (Section \\ref{{sec-content-attribution}}) would predict."
+    f"Pair-specificity has a direct methodological consequence. Because senders within the same group assign opposite meanings to the same token, per-sender effects ({sender_eff}) cancel when pooled, leaving an aggregate any-token effect of {agg_eff}, with mixed sender polarities in {mixed_regime_seeds} of {mixed_regime_total} seeds (Appendix \\ref{{app:aggregate-cancellation}}). Any evaluation that pools across senders before testing for sender-specific structure---including mutual information, topographic similarity, and pooled token effects---will systematically under-detect receiver influence in channels of this type. This is the receiver-influence property of the framework (Table \\ref{{tbl-eval-design}}): it passes, but only pair-specifically. The pair-specificity connects directly to scaffolded cooperation (Section \\ref{{sec-discussion}}): senders within a group have learned different private conventions rather than a shared code, which is what independent per-sender variation during training (Section \\ref{{sec-content-attribution}}) would predict."
+)
+```
+
+```{python}
+#| echo: false
+#| output: asis
+import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+
+
+def jitter_positions(center, count, width=0.10):
+    if count <= 1:
+        return [center]
+    return [center - width + (2.0 * width * idx) / (count - 1) for idx in range(count)]
+
+
+fig = plt.figure(figsize=(7.15, 2.32))
+gs = fig.add_gridspec(1, 3, width_ratios=[1.0, 1.0, 1.45])
+axes = np.array([fig.add_subplot(gs[0, idx]) for idx in range(3)])
+checkpoint_specs = [("50000", "50k"), ("150000", "150k")]
+palette = {
+    "agg": "#d9d9d9",
+    "agg_seed": "#737373",
+    "sender": "#238b45",
+    "sender_seed": "#005a32",
+    "align": "#756bb1",
+}
+
+for idx, (checkpoint_episode, label) in enumerate(checkpoint_specs):
+    seed_rows = sorted(
+        [row for row in SEMANTICS_SEED_ROWS if row["checkpoint_episode"] == checkpoint_episode],
+        key=lambda row: int(row["train_seed"]),
+    )
+
+    agg_center = idx - 0.16
+    sender_center = idx + 0.16
+    agg_seed_vals = [100.0 * float(row["aggregate_abs_mean"]) for row in seed_rows]
+    sender_seed_vals = [100.0 * float(row["per_sender_abs_mean"]) for row in seed_rows]
+
+    agg_mean = 100.0 * semantics_value(checkpoint_episode, "aggregate_abs_mean")
+    agg_sem = 100.0 * semantics_value(checkpoint_episode, "aggregate_abs_sem")
+    sender_mean = 100.0 * semantics_value(checkpoint_episode, "per_sender_abs_mean")
+    sender_sem = 100.0 * semantics_value(checkpoint_episode, "per_sender_abs_sem")
+
+    axes[0].bar(agg_center, agg_mean, width=0.24, color=palette["agg"], edgecolor="black", linewidth=0.55)
+    axes[0].bar(sender_center, sender_mean, width=0.24, color=palette["sender"], edgecolor="black", linewidth=0.55)
+    axes[0].errorbar([agg_center], [agg_mean], yerr=[agg_sem], fmt="none", ecolor="black", capsize=2, lw=0.9)
+    axes[0].errorbar([sender_center], [sender_mean], yerr=[sender_sem], fmt="none", ecolor="black", capsize=2, lw=0.9)
+    axes[0].scatter(
+        jitter_positions(agg_center, len(agg_seed_vals)),
+        agg_seed_vals,
+        s=10,
+        color=palette["agg_seed"],
+        alpha=0.72,
+        zorder=3,
+    )
+    axes[0].scatter(
+        jitter_positions(sender_center, len(sender_seed_vals)),
+        sender_seed_vals,
+        s=10,
+        color=palette["sender_seed"],
+        alpha=0.72,
+        zorder=3,
+    )
+
+    align_seed_vals = [float(row["alignment_regime_sign"]) for row in seed_rows]
+    align_mean = semantics_value(checkpoint_episode, "alignment_regime_mean")
+    axes[1].scatter(
+        jitter_positions(idx, len(align_seed_vals), width=0.14),
+        align_seed_vals,
+        s=12,
+        color=palette["align"],
+        alpha=0.78,
+        zorder=3,
+    )
+    axes[1].hlines(align_mean, idx - 0.18, idx + 0.18, color="black", linewidth=1.2)
+
+axes[0].set_xticks(range(len(checkpoint_specs)))
+axes[0].set_xticklabels([label for _, label in checkpoint_specs], fontsize=6.6)
+axes[0].set_ylabel("Effect magnitude (pp)", fontsize=6.8)
+axes[0].set_xlabel("Checkpoint", fontsize=6.8)
+axes[0].tick_params(labelsize=6.4)
+axes[0].spines["top"].set_visible(False)
+axes[0].spines["right"].set_visible(False)
+axes[0].grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.55)
+axes[0].legend(
+    handles=[
+        Line2D([0], [0], marker="s", color="w", markerfacecolor=palette["agg"], markeredgecolor="black", label=r"aggregate $|\delta_{\mathrm{agg}}|$"),
+        Line2D([0], [0], marker="s", color="w", markerfacecolor=palette["sender"], markeredgecolor="black", label=r"per-sender $|\delta_{i \rightarrow j}|$"),
+    ],
+    frameon=False,
+    loc="lower center",
+    bbox_to_anchor=(0.55, 1.07),
+    ncol=1,
+    fontsize=5.8,
+    handletextpad=0.35,
+    borderaxespad=0.0,
+)
+axes[0].text(
+    -0.08,
+    1.06,
+    "A",
+    transform=axes[0].transAxes,
+    fontsize=8.5,
+    fontweight="bold",
+    bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 0.4},
+)
+
+axes[1].axhline(0.0, color="black", linewidth=0.7, alpha=0.7)
+axes[1].set_xticks(range(len(checkpoint_specs)))
+axes[1].set_xticklabels([label for _, label in checkpoint_specs], fontsize=6.6)
+axes[1].set_ylim(-1.05, 1.05)
+axes[1].set_ylabel("")
+axes[1].set_xlabel("Checkpoint", fontsize=6.8)
+axes[1].tick_params(labelsize=6.4)
+axes[1].tick_params(axis="y", labelleft=False)
+axes[1].spines["top"].set_visible(False)
+axes[1].spines["right"].set_visible(False)
+axes[1].grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.55)
+axes[1].legend(
+    handles=[
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=palette["align"], markeredgecolor=palette["align"], label="seed"),
+        Line2D([0], [0], color="black", lw=1.2, label="mean"),
+    ],
+    frameon=False,
+    loc="lower center",
+    bbox_to_anchor=(0.55, 1.07),
+    ncol=2,
+    fontsize=5.8,
+    columnspacing=0.6,
+    handletextpad=0.35,
+    borderaxespad=0.0,
+)
+axes[1].text(
+    -0.08,
+    1.06,
+    "B",
+    transform=axes[1].transAxes,
+    fontsize=8.5,
+    fontweight="bold",
+    bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 0.4},
+)
+
+transfer_categories = [
+    ("natural_coop_rate", "same\nseed"),
+    ("public_random_coop_rate", "random"),
+    ("identity_coop_rate_mean", "foreign\nraw"),
+    ("predicted_coop_rate_mean", "pre-spec.\nrule"),
+    ("best_aligned_coop_rate_mean", "post hoc\nceiling"),
+]
+focal_specs_transfer = [
+    ("3.5", r"$f=3.5$", "#c23b22", "o", -0.05),
+    ("5.0", r"$f=5.0$", "#2171b5", "s", 0.05),
+]
+x_base = np.arange(len(transfer_categories))
+all_transfer_y = []
+for f_val, f_label, color, marker, offset in focal_specs_transfer:
+    y_vals = []
+    y_errs = []
+    for field, _ in transfer_categories:
+        mean, sem = nonoracle_receiver_mean_sem("weighted_slot_sign", f_val, field)
+        y_vals.append(100.0 * mean)
+        y_errs.append(100.0 * sem)
+    all_transfer_y.extend(y_vals)
+    axes[2].errorbar(
+        x_base + offset,
+        y_vals,
+        yerr=y_errs,
+        color=color,
+        marker=marker,
+        linestyle="none",
+        linewidth=0.9,
+        elinewidth=0.8,
+        capsize=2.0,
+        capthick=0.8,
+        markersize=3.2,
+        label=f_label,
+        zorder=3,
+    )
+
+axes[2].axvline(0.5, color="#888888", linewidth=0.65, linestyle=":", alpha=0.75)
+axes[2].axvline(3.5, color="#888888", linewidth=0.65, linestyle=":", alpha=0.75)
+axes[2].text(0, 1.03, "ref.", transform=axes[2].get_xaxis_transform(), fontsize=5.7, va="bottom", ha="center", color="#555555")
+axes[2].text(2, 1.03, "zero-shot", transform=axes[2].get_xaxis_transform(), fontsize=5.7, va="bottom", ha="center", color="#555555")
+axes[2].text(4, 1.03, "ceiling", transform=axes[2].get_xaxis_transform(), fontsize=5.7, va="bottom", ha="center", color="#555555")
+axes[2].set_xticks(x_base)
+axes[2].set_xticklabels([label for _, label in transfer_categories], fontsize=5.7)
+axes[2].set_ylabel("Cooperation (%)", fontsize=6.8)
+axes[2].set_xlabel("Transfer condition", fontsize=6.8)
+axes[2].tick_params(labelsize=6.2)
+axes[2].grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.55)
+axes[2].spines["top"].set_visible(False)
+axes[2].spines["right"].set_visible(False)
+y_min = max(0, np.floor((min(all_transfer_y) - 3.0) / 5.0) * 5.0)
+y_max = min(100, np.ceil((max(all_transfer_y) + 3.0) / 5.0) * 5.0)
+axes[2].set_ylim(y_min, y_max)
+axes[2].legend(
+    frameon=False,
+    fontsize=5.8,
+    loc="lower center",
+    bbox_to_anchor=(0.56, 1.11),
+    ncol=2,
+    handlelength=1.1,
+    columnspacing=0.6,
+    handletextpad=0.35,
+    borderaxespad=0.0,
+)
+axes[2].text(
+    -0.04,
+    1.06,
+    "C",
+    transform=axes[2].transAxes,
+    fontsize=8.5,
+    fontweight="bold",
+    bbox={"facecolor": "white", "edgecolor": "none", "alpha": 0.75, "pad": 0.4},
+)
+
+fig.subplots_adjust(left=0.07, right=0.985, bottom=0.23, top=0.76, wspace=0.34)
+alignment_fig_path = GENERATED_FIG_ROOT / "fig-alignment.pdf"
+fig.savefig(alignment_fig_path, bbox_inches="tight")
+plt.close(fig)
+print(
+    render_figure_here(
+        "fig-alignment",
+        r"Convention fragmentation as aggregate cancellation (A, B) and portability failure (C). A: per-sender effects remain large while pooled effects are small because senders within a group disagree on token meanings. B: regime-sign alignment per seed; values near $0$ indicate mixed sender polarities. C: receiver-seed means $\pm$ SEM over 15 frozen receivers. Same seed = co-trained senders; random = random substitution; foreign raw = other-seed messages without alignment; pre-spec. rule = best rule from sender statistics; post hoc ceiling = outcome-chosen per-pair $0 \leftrightarrow 1$ flip upper bound. Foreign raw lands near random, the ceiling matches same-seed, and the pre-specified rule closes little of that gap.",
+        alignment_fig_path,
+        position="H",
+    )
 )
 ```
 
 ## Portability: learned channel conventions do not transfer across populations {#sec-lowdim}
 
-We take a receiver trained in one seed and feed it, at test time, the natural message rollouts recorded from a different seed's learned senders, keeping the receiver's policy frozen. We then measure cooperation (Appendix \ref{app:transfer}). Three questions structure the test.
+For each trained receiver, we freeze its policy and replace its own senders' messages at test time with natural message rollouts recorded from a different seed's senders, then measure cooperation (Appendix \ref{app:transfer}). Three questions structure the test (Panel C of Figure \ref{fig-alignment}).
 
 ```{python}
 #| echo: false
 #| output: asis
-tt_pr = tex_tt("public_random")
-foreign_35 = pct_math(transfer_value('3.5', 'foreign_identity_mean'))
-foreign_50 = pct_math(transfer_value('5.0', 'foreign_identity_mean'))
-public_35 = pct_math(transfer_value('3.5', 'public_random_mean'))
-public_50 = pct_math(transfer_value('5.0', 'public_random_mean'))
-indep_35 = pct_math(transfer_value('3.5', 'indep_random_mean'))
-indep_50 = pct_math(transfer_value('5.0', 'indep_random_mean'))
-foreign_minus_public_35 = pp_math(transfer_value('3.5', 'foreign_identity_mean') - transfer_value('3.5', 'public_random_mean'))
-foreign_minus_public_50 = pp_math(transfer_value('5.0', 'foreign_identity_mean') - transfer_value('5.0', 'public_random_mean'))
-foreign_public_gap_range = pp_range_math(
-    min(
-        abs(100.0 * (transfer_value('3.5', 'foreign_identity_mean') - transfer_value('3.5', 'public_random_mean'))),
-        abs(100.0 * (transfer_value('5.0', 'foreign_identity_mean') - transfer_value('5.0', 'public_random_mean'))),
-    ),
-    max(
-        abs(100.0 * (transfer_value('3.5', 'foreign_identity_mean') - transfer_value('3.5', 'public_random_mean'))),
-        abs(100.0 * (transfer_value('5.0', 'foreign_identity_mean') - transfer_value('5.0', 'public_random_mean'))),
-    ),
-)
-natural_35 = pct_math(transfer_value('3.5', 'natural_mean'))
-natural_50 = pct_math(transfer_value('5.0', 'natural_mean'))
-no_oracle_35 = pct_math(transfer_value('3.5', 'foreign_best_aligned_mean'))
-no_oracle_50 = pct_math(transfer_value('5.0', 'foreign_best_aligned_mean'))
 rule_names = sorted({row["rule_name"] for row in NONORACLE_SUMMARY_ROWS})
 rule_count = len(rule_names)
 rule_count_text = "three" if rule_count == 3 else str(rule_count)
-no_pred_35 = pct_math(nonoracle_value('weighted_slot_sign', '3.5', 'predicted_mean'))
-no_pred_50 = pct_math(nonoracle_value('weighted_slot_sign', '5.0', 'predicted_mean'))
-pred_minus_raw_35 = pp_math(nonoracle_value('weighted_slot_sign', '3.5', 'predicted_minus_identity_mean'))
-pred_minus_raw_50 = pp_math(nonoracle_value('weighted_slot_sign', '5.0', 'predicted_minus_identity_mean'))
-pred_below_oracle_35 = abs_pp_math(abs(nonoracle_value('weighted_slot_sign', '3.5', 'predicted_minus_best_aligned_mean')))
-pred_below_oracle_50 = abs_pp_math(abs(nonoracle_value('weighted_slot_sign', '5.0', 'predicted_minus_best_aligned_mean')))
-mixed_regime_seeds_port = int(round(float(semantics_value('150000', 'mixed_regime_seed_count'))))
-mixed_regime_total_port = int(round(float(semantics_value('150000', 'n_seeds'))))
 print(
-    f"**Does the foreign channel transfer at all?** A receiver fed messages from a different seed cooperates at {foreign_35} at $f=3.5$ and {foreign_50} at $f=5.0$---the same range as a random-message substitution applied to the same frozen learned receivers ({tt_pr}: {public_35} / {public_50}; Appendix \\ref{{app:transfer}}). This alone is weak evidence: Section \\ref{{sec-content-attribution}} showed learned-trained policies depend only modestly on runtime messages, so many substitutions land in this window.\n\n"
-    f"**Does recoverable structure exist in the foreign messages?** The per-pair bit flip chosen after seeing each transfer outcome---a post hoc ceiling, not a rule---reaches {no_oracle_35} and {no_oracle_50}, matching or slightly exceeding natural same-seed levels ({natural_35}, {natural_50}). Structure exists: if one could predict which pairs need flipping, transfer would work.\n\n"
-    f"**Can a pre-specified rule recover it?** The best of {rule_count_text} polarity rules derived from each seed's sender statistics (Appendix \\ref{{app:transfer}}) reaches {no_pred_35} and {no_pred_50}: {pred_minus_raw_35} and {pred_minus_raw_50} above raw transfer, {pred_below_oracle_35} and {pred_below_oracle_50} below the ceiling. Thus, the apparent transfer under the post hoc flip reflects pair-by-pair selection, not a convention that these sender-statistic rules can recover.\n\n"
-    f"What foreign messages carry is pair-specific. Because senders within a seed assign opposite meanings to the same token ({mixed_regime_seeds_port} of {mixed_regime_total_port} seeds have mixed polarities), and the relevant polarities differ across seeds as well (Section \\ref{{sec-sender-probes}}), the per-pair conventions that drive cooperation within a population have no generator that transfers across populations.\n\n"
-    f"This is the portability property of the framework (Table \\ref{{tbl-eval-design}}), and it fails. Portability failure completes the four-property profile of scaffolded coordination: senders learn private per-pair conventions, not a shared code that survives exposure to new partners (Section \\ref{{sec-discussion}})."
+    f"**Does the foreign channel transfer at all?** This question alone has limited power, because Section \\ref{{sec-content-attribution}} showed learned-trained policies depend only modestly on runtime messages: foreign and random substitutions can both land in a narrow window. A receiver fed messages from a different seed indeed lands in that window, close to random-message substitution on the same frozen learned receivers (Panel C of Figure \\ref{{fig-alignment}}). The more informative tests come next.\n\n"
+    f"**Does recoverable structure exist in the foreign messages?** We compute, for each receiver--donor pair, whether a global $0 \\leftrightarrow 1$ bit flip would maximize transfer after seeing the outcome---a post hoc ceiling, not a rule. This ceiling matches or slightly exceeds natural same-seed performance at both regimes (Panel C of Figure \\ref{{fig-alignment}}). Structure exists: if one could predict which pairs need flipping, transfer would work.\n\n"
+    f"**Can a pre-specified rule recover it?** Across {rule_count_text} polarity rules derived from each seed's sender statistics, the best is only marginally above raw transfer and random controls, and well below the ceiling (Panel C of Figure \\ref{{fig-alignment}}; Appendix \\ref{{app:transfer}}). The post hoc flip's apparent transfer therefore reflects pair-by-pair selection, not a convention a simple rule can recover.\n\n"
+    f"Sender conventions are therefore pair-specific and non-portable: senders within a seed disagree on token meanings, and seeds disagree with each other, so per-pair conventions within one population have no shared structure that transfers (Figure \\ref{{fig-alignment}}, Panels B--C).\n\n"
+    f"This is the portability property of the framework (Table \\ref{{tbl-eval-design}}), and it fails. Portability failure completes the four-property profile of scaffolded cooperation: senders learn private per-pair conventions, not a shared code that survives exposure to new partners (Section \\ref{{sec-discussion}})."
 )
 ```
 
@@ -2572,9 +2781,9 @@ This is consistent with the content-attribution result: if the channel functions
 
 # Discussion {#sec-discussion}
 
-Across the four evaluations, encoding passes: messages carry task-relevant information. Content attribution fails as the primary explanation of the cooperation benefit. Receiver influence passes but is pair-specific and cancels in aggregate. Portability fails under cross-seed transfer. The learned channel affects receivers, but its cooperative benefit is largely explained by training-time input variation and does not yield a portable code. We call this pattern *scaffolded coordination*: communication-like influence within a trained group without a portable semantic protocol.
+Across the four evaluations, encoding passes: messages carry task-relevant information. Content attribution fails as the primary explanation of the cooperation benefit. Receiver influence passes but is pair-specific and cancels in aggregate. Portability fails under cross-seed transfer. The learned channel affects receivers, but its cooperative benefit is largely explained by training-time input variation and does not yield a portable code. We call this pattern *scaffolded cooperation*: communication-like influence within a trained group without a portable semantic protocol.
 
-Scaffolded coordination sits between classical cheap talk [@crawford1982strategic], which works through credible content, and correlation devices [@aumann1974subjectivity], which work through shared randomness. Ours is neither: a shared random bit fails, arguing against a correlation-device explanation, and four independent bits succeed, so learned content is not needed either. What matters is independent per-sender variation during training.
+Scaffolded cooperation sits between classical cheap talk [@crawford1982strategic], which works through credible content, and correlation devices [@aumann1974subjectivity], which work through shared randomness---though our setting is a cooperation problem rather than an equilibrium-selection problem, so the correlation-device comparator is imperfect. Even read as a shared-cue account, the pattern is neither: a shared random bit fails, arguing against a shared-cue explanation, and four independent bits succeed, so learned content is not needed either. In this setting, independent per-sender variation during training is sufficient; whether it is also necessary, and whether it remains sufficient as vocabulary or population scales, is untested here.
 
 ```{python}
 #| echo: false
@@ -2588,7 +2797,7 @@ print(
 )
 ```
 
-These failures suggest a minimum evaluation protocol:
+These failures motivate the four-family evaluation protocol instantiated above:
 
 ```{=latex}
 \begin{enumerate}[leftmargin=*,nosep]
@@ -2599,13 +2808,15 @@ These failures suggest a minimum evaluation protocol:
 \end{enumerate}
 ```
 
+In our case study, the four families were jointly necessary: no single one would have distinguished learned content from useful channel structure. Which families remain informative in other settings likely depends on vocabulary size, population size, and architecture, and is an empirical question we leave to future work.
+
 The gap between learned and random messages bounds the content contribution during training; endpoint cross-over tests runtime reliance; the gap between same-seed and cross-seed performance bounds portability.
 
 **Future directions.** Each failed test suggests interventions worth testing. Content-dependence might be raised by sender-side information bottlenecks or by receiver architectures (recurrent or state-space) that separate sender identity from signal content. Portability might be improved by population-based training, cross-play regularization, or training objectives rewarding inter-population compatibility. Which lever matters most is an empirical question our framework is designed to ask.
 
 ## Limitations
 
-The central result---that uniform random messages nearly match learned communication---is established in a binary-vocabulary setting. The message-source family does not isolate which aspect of per-sender variation drives the effect, and uses full-history agents only, so whether the equivalence holds under reduced history is untested. We do not test how the learned--uniform comparison scales with vocabulary size here; that question requires a dedicated matched experiment rather than extrapolation from the binary case. Learned-trained policies also show small but real channel dependence at evaluation that scaffolded coordination alone does not fully explain. Three candidate sources---residual content decoding, more finely tuned message statistics, or sender--receiver coadaptation during training---remain to be distinguished in future experiments.
+The central result---that uniform random messages nearly match learned communication---is established in a binary-vocabulary setting. The message-source family does not isolate which aspect of per-sender variation drives the effect, and uses full-history agents only, so whether the equivalence holds under reduced history is untested. We do not test how the learned--uniform comparison scales with vocabulary size here; that question requires a dedicated matched experiment rather than extrapolation from the binary case. Learned-trained policies also show small but real channel dependence at evaluation that scaffolded cooperation alone does not fully explain. Three candidate sources---residual content decoding, more finely tuned message statistics, or sender--receiver coadaptation during training---remain to be distinguished in future experiments.
 
 The factorial removes all temporal inputs together, so which specific features mediate the interaction is unknown; the result also applies only to feed-forward policies. Cross-seed transfer uses direct zero-shot substitution with a fixed receiver; richer transfer methods remain untested. Finally, this is a single-game, four-agent case study; the recommendations need validation in other settings.
 
@@ -2815,119 +3026,9 @@ print(
 ```{python}
 #| echo: false
 #| output: asis
-import matplotlib.pyplot as plt
-from matplotlib.lines import Line2D
-
-
-def jitter_positions(center, count, width=0.10):
-    if count <= 1:
-        return [center]
-    return [center - width + (2.0 * width * idx) / (count - 1) for idx in range(count)]
-
-
-fig, axes = plt.subplots(1, 2, figsize=(6.8, 2.9))
-checkpoint_specs = [("50000", "50k"), ("150000", "150k")]
-palette = {"agg": "#bdd7e7", "sender": "#2171b5", "align": "#c23b22"}
-
-for idx, (checkpoint_episode, label) in enumerate(checkpoint_specs):
-    seed_rows = sorted(
-        [row for row in SEMANTICS_SEED_ROWS if row["checkpoint_episode"] == checkpoint_episode],
-        key=lambda row: int(row["train_seed"]),
-    )
-
-    agg_center = idx - 0.16
-    sender_center = idx + 0.16
-    agg_seed_vals = [100.0 * float(row["aggregate_abs_mean"]) for row in seed_rows]
-    sender_seed_vals = [100.0 * float(row["per_sender_abs_mean"]) for row in seed_rows]
-
-    agg_mean = 100.0 * semantics_value(checkpoint_episode, "aggregate_abs_mean")
-    agg_sem = 100.0 * semantics_value(checkpoint_episode, "aggregate_abs_sem")
-    sender_mean = 100.0 * semantics_value(checkpoint_episode, "per_sender_abs_mean")
-    sender_sem = 100.0 * semantics_value(checkpoint_episode, "per_sender_abs_sem")
-
-    axes[0].bar(agg_center, agg_mean, width=0.24, color=palette["agg"], edgecolor="black", linewidth=0.6)
-    axes[0].bar(sender_center, sender_mean, width=0.24, color=palette["sender"], edgecolor="black", linewidth=0.6)
-    axes[0].errorbar([agg_center], [agg_mean], yerr=[agg_sem], fmt="none", ecolor="black", capsize=3, lw=1.0)
-    axes[0].errorbar([sender_center], [sender_mean], yerr=[sender_sem], fmt="none", ecolor="black", capsize=3, lw=1.0)
-    axes[0].scatter(
-        jitter_positions(agg_center, len(agg_seed_vals)),
-        agg_seed_vals,
-        s=16,
-        color="#6baed6",
-        alpha=0.8,
-        zorder=3,
-    )
-    axes[0].scatter(
-        jitter_positions(sender_center, len(sender_seed_vals)),
-        sender_seed_vals,
-        s=16,
-        color="#08519c",
-        alpha=0.8,
-        zorder=3,
-    )
-
-    align_seed_vals = [float(row["alignment_regime_sign"]) for row in seed_rows]
-    align_mean = semantics_value(checkpoint_episode, "alignment_regime_mean")
-    axes[1].scatter(
-        jitter_positions(idx, len(align_seed_vals), width=0.14),
-        align_seed_vals,
-        s=18,
-        color=palette["align"],
-        alpha=0.85,
-        zorder=3,
-    )
-    axes[1].hlines(align_mean, idx - 0.18, idx + 0.18, color="black", linewidth=1.6)
-
-axes[0].set_xticks(range(len(checkpoint_specs)))
-axes[0].set_xticklabels([label for _, label in checkpoint_specs], fontsize=8)
-axes[0].set_ylabel("Effect magnitude (pp)")
-axes[0].set_xlabel("Checkpoint")
-axes[0].spines["top"].set_visible(False)
-axes[0].spines["right"].set_visible(False)
-axes[0].grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.6)
-
-axes[1].axhline(0.0, color="black", linewidth=0.8, alpha=0.7)
-axes[1].set_xticks(range(len(checkpoint_specs)))
-axes[1].set_xticklabels([label for _, label in checkpoint_specs], fontsize=8)
-axes[1].set_ylim(-1.05, 1.05)
-axes[1].set_ylabel("Regime-sign alignment")
-axes[1].set_xlabel("Checkpoint")
-axes[1].spines["top"].set_visible(False)
-axes[1].spines["right"].set_visible(False)
-axes[1].grid(axis="y", color="#cccccc", alpha=0.35, linewidth=0.6)
-
-fig.legend(
-    handles=[
-        Line2D([0], [0], marker="s", color="w", markerfacecolor=palette["agg"], markeredgecolor="black", label=r"aggregate $|\delta_{\mathrm{agg}}|$"),
-        Line2D([0], [0], marker="s", color="w", markerfacecolor=palette["sender"], markeredgecolor="black", label=r"per-sender $|\delta_{i \rightarrow j}|$"),
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=palette["align"], label="alignment seed"),
-    ],
-    frameon=False,
-    loc="upper center",
-    ncol=3,
-    bbox_to_anchor=(0.5, 1.10),
-    fontsize=8,
-)
-
-plt.tight_layout()
-alignment_fig_path = GENERATED_FIG_ROOT / "fig-alignment.pdf"
-fig.savefig(alignment_fig_path, bbox_inches="tight")
-plt.close(fig)
-print(
-    render_figure_here(
-        "fig-alignment",
-        r"Why do pooled token effects look weak despite large per-sender effects? Left: per-sender effects (mean $|\delta_{i \rightarrow j}|$, orange) remain large across seeds, while aggregate effects (mean $|\delta_{\mathrm{agg}}|$, blue) are much smaller, at both 50k and 150k. Right: the regime-sign alignment index shows why---many seeds have mixed sender polarities (values near $0$), meaning opposite-sign sender conventions cancel in aggregate. A value of $+1$ would indicate all senders share one polarity.",
-        alignment_fig_path,
-    )
-)
-```
-
-```{python}
-#| echo: false
-#| output: asis
 ratio_150 = math_text(f"{fmt_num(semantics_value('150000', 'aggregate_vs_sender_ratio'), 1)}\\times")
 print(
-    f"At 150k, the aggregate signed observational token effect is essentially zero: {pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semantics_value('150000', 'aggregate_signed_sem'))} (Figure \\ref{{fig-alignment}}, left). Yet the corresponding per-sender absolute effect remains {abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))}, about {ratio_150} larger than the aggregate absolute effect. This is aggregate cancellation: sender-conditioned endpoint effects survive, but many point in different directions and largely vanish when pooled."
+    f"At 150k, the aggregate signed observational token effect is essentially zero: {pp_pm_math(semantics_value('150000', 'aggregate_signed_mean'), semantics_value('150000', 'aggregate_signed_sem'))} (Figure \\ref{{fig-alignment}}, Panel A). Yet the corresponding per-sender absolute effect remains {abs_pp_pm_math(semantics_value('150000', 'per_sender_abs_mean'), semantics_value('150000', 'per_sender_abs_sem'))}, about {ratio_150} larger than the aggregate absolute effect. This is aggregate cancellation: sender-conditioned endpoint effects survive, but many point in different directions and largely vanish when pooled."
 )
 ```
 
@@ -2935,7 +3036,7 @@ print(
 #| echo: false
 #| output: asis
 print(
-    f"Sender polarity diagnostics show why the cancellation persists (Figure \\ref{{fig-alignment}}, right). The mean regime-sign alignment index is only {math_text(fmt_num(semantics_value('50000', 'alignment_regime_mean'), 2))} at 50k and {math_text(fmt_num(semantics_value('150000', 'alignment_regime_mean'), 2))} at 150k, while mixed-polarity seeds account for {int(semantics_value('50000', 'mixed_regime_seed_count'))}/{int(semantics_value('50000', 'n_seeds'))} and {int(semantics_value('150000', 'mixed_regime_seed_count'))}/{int(semantics_value('150000', 'n_seeds'))} seeds respectively. Even at 150k, the mean absolute sender polarity remains {abs_pp_pm_math(semantics_value('150000', 'mean_abs_regime_delta'), semantics_value('150000', 'mean_abs_regime_delta_sem'))}. Different senders within the same trained population therefore often disagree on what token 1 tends to signal, which is better described as sender-indexed dialects than as one shared sign convention."
+    f"Sender polarity diagnostics show why the cancellation persists (Figure \\ref{{fig-alignment}}, Panel B). The mean regime-sign alignment index is only {math_text(fmt_num(semantics_value('50000', 'alignment_regime_mean'), 2))} at 50k and {math_text(fmt_num(semantics_value('150000', 'alignment_regime_mean'), 2))} at 150k, while mixed-polarity seeds account for {int(semantics_value('50000', 'mixed_regime_seed_count'))}/{int(semantics_value('50000', 'n_seeds'))} and {int(semantics_value('150000', 'mixed_regime_seed_count'))}/{int(semantics_value('150000', 'n_seeds'))} seeds respectively. Even at 150k, the mean absolute sender polarity remains {abs_pp_pm_math(semantics_value('150000', 'mean_abs_regime_delta'), semantics_value('150000', 'mean_abs_regime_delta_sem'))}. Different senders within the same trained population therefore often disagree on what token 1 tends to signal, which is better described as sender-indexed dialects than as one shared sign convention."
 )
 ```
 
